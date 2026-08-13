@@ -44,9 +44,11 @@ TOOL_PACKAGES = {
     "cowpatty": "cowpatty",
     "iw": "iw",
     "nmcli": "network-manager",
+    "hashcat": "hashcat",
+    "hcxpcapngtool": "hcxtools",
 }
 REQUIRED_BINS = ("airmon-ng", "airodump-ng", "aireplay-ng", "aircrack-ng")
-OPTIONAL_BINS = ("cowpatty", "iw", "nmcli")
+OPTIONAL_BINS = ("cowpatty", "iw", "nmcli", "hashcat", "hcxpcapngtool")
 
 
 def effective_home() -> Path:
@@ -325,6 +327,13 @@ def clear_screen() -> None:
     console.clear()
 
 
+def is_wpa3(security: str) -> bool:
+    low = (security or "").lower()
+    if "wpa2" in low and "wpa3" not in low and "sae" not in low:
+        return False
+    return "wpa3" in low or "sae" in low
+
+
 def menu_value(text: str, set_: bool) -> str:
     if set_ and text:
         return f"[bold green]{text}[/bold green]"
@@ -341,7 +350,10 @@ def render_menu(settings: Settings) -> None:
         target_label = settings.target.ssid
         if settings.target.bssid:
             target_label = f"{settings.target.ssid}  ({settings.target.bssid})"
-        target = menu_value(target_label, True)
+        if is_wpa3(settings.target.security):
+            target = f"{menu_value(target_label, True)} [yellow]WPA3[/yellow]"
+        else:
+            target = menu_value(target_label, True)
     else:
         target = menu_value("", False)
     word = menu_value(Path(settings.wordlist).name if settings.wordlist else "", bool(settings.wordlist))
@@ -876,10 +888,106 @@ def crack_capture(capfile: Path, bssid: str, wordlist: str) -> tuple[Optional[st
     return None, output
 
 
+def cap_to_hc22000(capfile: Path) -> tuple[Optional[Path], str]:
+    tool = which_or_none("hcxpcapngtool")
+    if not tool:
+        return None, "hcxpcapngtool was not found (package: hcxtools)"
+    out = capfile.with_suffix(".hc22000")
+    code, text = run_cmd([tool, "-o", str(out), str(capfile)], timeout=60)
+    if not out.exists() or out.stat().st_size == 0:
+        return None, text or "Conversion produced an empty .hc22000 file"
+    return out, text
+
+
+def read_hashcat_plain(path: Path) -> Optional[str]:
+    if not path.exists():
+        return None
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        return None
+    if not text:
+        return None
+    last = text.splitlines()[-1].strip()
+    if ":" in last:
+        return last.rsplit(":", 1)[-1]
+    return last
+
+
+def crack_hashcat(hashfile: Path, wordlist: str) -> tuple[Optional[str], str]:
+    hashcat = which_or_none("hashcat")
+    if not hashcat:
+        return None, "hashcat was not found on PATH"
+    outfile = hashfile.with_suffix(".cracked")
+    cmd = [
+        hashcat,
+        "-m",
+        "22000",
+        "-a",
+        "0",
+        "-D",
+        "2",
+        "--outfile",
+        str(outfile),
+        "--outfile-format",
+        "2",
+        "--status",
+        str(hashfile),
+        wordlist,
+    ]
+    console.print(f"[dim]$ {' '.join(cmd)}[/dim]\n")
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+    except OSError as exc:
+        return None, str(exc)
+
+    collected: list[str] = []
+    assert proc.stdout is not None
+    try:
+        for line in proc.stdout:
+            text = line.rstrip("\n")
+            collected.append(text)
+            console.print(text)
+        proc.wait()
+    except KeyboardInterrupt:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+        raise BackToMenu from None
+
+    output = "\n".join(collected)
+    found = read_hashcat_plain(outfile)
+    if found:
+        return found, output
+    low = output.lower()
+    if "cracked" in low:
+        found = read_hashcat_plain(outfile)
+        if found:
+            return found, output
+    if proc.returncode not in {0, 1} and not output:
+        return None, "hashcat exited with an error"
+    return None, output
+
+
 def action_capture(settings: Settings) -> None:
-    if not ensure_root("capture") or not require_capture_ready(settings):
+    if not require_capture_ready(settings):
         return
-    if not require_bins(REQUIRED_BINS):
+    if is_wpa3(settings.target.security):
+        warn_and_back(
+            "WPA3 not supported",
+            "The selected network uses WPA3/SAE.\n"
+            "aircrack-ng handshake capture (-a2) does not apply to SAE.\n"
+            "Pick a WPA/WPA2 target from menu [bold]2[/bold].",
+        )
+        return
+    if not ensure_root("capture") or not require_bins(REQUIRED_BINS):
         return
 
     handshake_dir = Path(settings.handshake_dir or DEFAULT_HANDSHAKE_DIR)
@@ -897,6 +1005,8 @@ def action_capture(settings: Settings) -> None:
     summary.add_row("Adapter", settings.interface)
     summary.add_row("Target", f"{settings.target.ssid}  ({settings.target.bssid})")
     summary.add_row("Channel", settings.target.channel)
+    sec = settings.target.security or "-"
+    summary.add_row("Security", f"[yellow]{sec}[/yellow]" if is_wpa3(sec) else sec)
     summary.add_row("Handshake dir", str(handshake_dir))
     console.print(Panel(summary, title="Capture handshake", border_style="yellow"))
     console.print(
@@ -1154,6 +1264,45 @@ def action_crack_saved(settings: Settings) -> None:
                 warn_and_back("BSSID required", "Pick a network from the capture list.")
                 return
 
+    use_hashcat = False
+    if which_or_none("hashcat"):
+        console.print("1  aircrack-ng (CPU)")
+        console.print("2  hashcat (GPU)  [default]\n")
+        engine = ask("Engine").strip()
+        use_hashcat = engine in {"", "2"}
+        if engine and engine not in {"1", "2"}:
+            warn_and_back("Invalid choice", "Enter 1 or 2.")
+            return
+
+    if use_hashcat:
+        if not which_or_none("hcxpcapngtool"):
+            console.print(
+                "[yellow]hcxpcapngtool is missing (needed to convert .cap to hashcat 22000).[/yellow]\n"
+                "Install it from menu [bold]5[/bold], or use CPU now.\n"
+            )
+            if not confirm("Use aircrack-ng (CPU) instead?", default=True):
+                return
+            use_hashcat = False
+        else:
+            console.print("[dim]Converting capture to hashcat 22000...[/dim]")
+            hashfile, conv_err = cap_to_hc22000(capfile)
+            if not hashfile:
+                warn_and_back(
+                    "Conversion failed",
+                    conv_err + "\n\nYou can retry with aircrack-ng (CPU).",
+                )
+                if not confirm("Use aircrack-ng (CPU) instead?", default=True):
+                    return
+                use_hashcat = False
+            else:
+                console.print(f"[green]Hash file:[/green] {hashfile}\n")
+                console.print("[dim]Running hashcat on GPU...[/dim]\n")
+                key, _out = crack_hashcat(hashfile, settings.wordlist)
+                console.print()
+                show_crack_result(key, capfile)
+                pause()
+                return
+
     console.print("[dim]Running aircrack-ng against the wordlist...[/dim]\n")
     key, _out = crack_capture(capfile, bssid, settings.wordlist)
     console.print()
@@ -1301,7 +1450,8 @@ def action_show_settings(settings: Settings) -> None:
     table.add_row("SSID", settings.target.ssid or "[red]not set[/red]")
     table.add_row("BSSID", settings.target.bssid or "-")
     table.add_row("Channel", settings.target.channel or "-")
-    table.add_row("Security", settings.target.security or "-")
+    sec = settings.target.security or "-"
+    table.add_row("Security", f"[yellow]{sec}[/yellow]" if is_wpa3(sec) else sec)
     table.add_row("Handshake dir", settings.handshake_dir or DEFAULT_HANDSHAKE_DIR)
     table.add_row("Config file", str(CONFIG_FILE))
     console.print(table)

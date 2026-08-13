@@ -4,5 +4,7 @@ __pycache__/
 handshakes/
 *.cap
 *.pcap
+*.hc22000
+*.cracked
 .airodump.log
 .DS_Store
