@@ -15,13 +15,13 @@ from rich.live import Live
 from rich.panel import Panel
 from rich.table import Table
 
-from figolab.lab_session import (
+from modules.figolab.lab_session import (
     LabError,
     cleanup_lab_session,
     detect_lab_dependencies,
     start_lab_session,
 )
-from figolab.models import LAB_PACKAGES, LabConfig, PortalConfig, channel_band
+from modules.figolab.models import LAB_PACKAGES, LabConfig, PortalConfig, channel_band
 
 console = Console()
 

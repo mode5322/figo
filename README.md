@@ -4,6 +4,34 @@ figo— A terminal-based Wi-Fi security testing toolkit for authorized lab envir
 
 Use only on networks you own or have explicit written permission to test.
 
+## Project layout
+
+```text
+figo/
+├── figo                 # launcher
+├── figo.py              # thin entrypoint
+├── install.sh
+├── README.md
+├── requirements.txt
+├── pytest.ini
+├── modules/             # application modules (split from the old monolith)
+│   ├── cli.py
+│   ├── config.py
+│   ├── capture.py
+│   ├── cracking.py
+│   ├── menu.py
+│   ├── monitor.py
+│   ├── network.py
+│   ├── setup_actions.py
+│   ├── tools.py
+│   ├── ui.py
+│   ├── wordlists.py
+│   └── figolab/         # Evil Twin Lab + awareness portal
+└── tests/
+```
+
+Root keeps the normal user-facing files. All library code lives under `modules/`.
+
 ## Install
 
 ```bash

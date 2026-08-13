@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from figolab.models import LabConfig
+    from modules.figolab.models import LabConfig
 
 
 def build_hostapd_conf(config: "LabConfig", conf_path: Path) -> Path:

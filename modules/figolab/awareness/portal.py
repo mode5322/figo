@@ -7,12 +7,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import TYPE_CHECKING, Optional
 from urllib.parse import parse_qs
 
-from figolab.awareness import templates
-from figolab.awareness.metrics import MetricsStore, safe_record_interaction
-from figolab.awareness.session import SessionStore
+from modules.figolab.awareness import templates
+from modules.figolab.awareness.metrics import MetricsStore, safe_record_interaction
+from modules.figolab.awareness.session import SessionStore
 
 if TYPE_CHECKING:
-    from figolab.models import LabConfig
+    from modules.figolab.models import LabConfig
 
 
 class AwarenessPortal:

@@ -8,16 +8,16 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from figolab.ap import build_dnsmasq_conf, build_hostapd_conf
-from figolab.awareness.metrics import (
+from modules.figolab.ap import build_dnsmasq_conf, build_hostapd_conf
+from modules.figolab.awareness.metrics import (
     MetricsStore,
     assert_no_sensitive_payload,
     safe_record_interaction,
 )
-from figolab.awareness.session import SessionStore, new_session_id
-from figolab.lab_session import LabSession, cleanup_lab_session, detect_lab_dependencies
-from figolab.models import LabConfig, PortalConfig, channel_band, validate_channel, validate_ssid
-from figolab.processes import ProcessTracker
+from modules.figolab.awareness.session import SessionStore, new_session_id
+from modules.figolab.lab_session import LabSession, cleanup_lab_session, detect_lab_dependencies
+from modules.figolab.models import LabConfig, PortalConfig, channel_band, validate_channel, validate_ssid
+from modules.figolab.processes import ProcessTracker
 
 
 def test_validate_ssid():
@@ -73,7 +73,7 @@ def test_hostapd_and_dnsmasq_generation(tmp_path: Path):
 
 
 def test_dependency_detection_mock():
-    with patch("figolab.lab_session.shutil.which", side_effect=lambda n: None if n == "hostapd" else f"/usr/bin/{n}"):
+    with patch("modules.figolab.lab_session.shutil.which", side_effect=lambda n: None if n == "hostapd" else f"/usr/bin/{n}"):
         missing = detect_lab_dependencies()
     assert "hostapd" in missing
 
@@ -138,28 +138,21 @@ def test_cleanup_idempotent(tmp_path: Path):
     session.temp_dir.mkdir()
     (session.temp_dir / "hostapd.conf").write_text("x", encoding="utf-8")
     session.tracker = ProcessTracker()
-    with patch("figolab.lab_session.restore_interface"):
+    with patch("modules.figolab.lab_session.restore_interface"):
         cleanup_lab_session(session)
         cleanup_lab_session(session)  # second call must not raise
     assert not session.temp_dir.exists()
 
 
 def test_settings_persistence_backward_compatible(tmp_path: Path, monkeypatch):
-    import importlib.util
-    import sys
+    import modules.config as config
 
-    figo_path = Path(__file__).resolve().parents[1] / "figo.py"
-    spec = importlib.util.spec_from_file_location("figo_main", figo_path)
-    figo = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    sys.modules["figo_main"] = figo
-    spec.loader.exec_module(figo)
-    monkeypatch.setattr(figo, "CONFIG_DIR", tmp_path / ".config" / "figo")
-    monkeypatch.setattr(figo, "CONFIG_FILE", tmp_path / ".config" / "figo" / "config.json")
+    monkeypatch.setattr(config, "CONFIG_DIR", tmp_path / ".config" / "figo")
+    monkeypatch.setattr(config, "CONFIG_FILE", tmp_path / ".config" / "figo" / "config.json")
 
     # Old config without portal key
-    figo.CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    figo.CONFIG_FILE.write_text(
+    config.CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    config.CONFIG_FILE.write_text(
         json.dumps(
             {
                 "interface": "wlan0",
@@ -170,18 +163,18 @@ def test_settings_persistence_backward_compatible(tmp_path: Path, monkeypatch):
         ),
         encoding="utf-8",
     )
-    settings = figo.load_settings()
+    settings = config.load_settings()
     assert settings.interface == "wlan0"
     assert isinstance(settings.portal, dict)
 
     settings.portal = PortalConfig(organization="Org").to_dict()
-    figo.save_settings(settings)
-    reloaded = figo.load_settings()
+    config.save_settings(settings)
+    reloaded = config.load_settings()
     assert reloaded.portal.get("organization") == "Org"
 
 
 def test_landing_template_has_no_password_field():
-    from figolab.awareness.templates import landing_page
+    from modules.figolab.awareness.templates import landing_page
 
     html = landing_page(
         ssid="ExampleNetwork",

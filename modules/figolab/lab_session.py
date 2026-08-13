@@ -11,13 +11,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-from figolab.ap import build_dnsmasq_conf, build_hostapd_conf, count_dhcp_leases
-from figolab.awareness.metrics import MetricsStore
-from figolab.awareness.portal import AwarenessPortal
-from figolab.awareness.session import SessionStore
-from figolab.interface import InterfaceSnapshot, restore_interface, set_nm_managed, snapshot_interface
-from figolab.models import LAB_BINS, LabConfig
-from figolab.processes import ProcessTracker
+from modules.figolab.ap import build_dnsmasq_conf, build_hostapd_conf, count_dhcp_leases
+from modules.figolab.awareness.metrics import MetricsStore
+from modules.figolab.awareness.portal import AwarenessPortal
+from modules.figolab.awareness.session import SessionStore
+from modules.figolab.interface import InterfaceSnapshot, restore_interface, set_nm_managed, snapshot_interface
+from modules.figolab.models import LAB_BINS, LabConfig
+from modules.figolab.processes import ProcessTracker
 
 
 class LabError(RuntimeError):
