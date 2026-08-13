@@ -40,7 +40,10 @@ sudo ./install.sh --uninstall
 ### Without installing
 
 ```bash
+xfi
+# or
 python3 xfi.py
+
 # or
 ./xfi
 ```
@@ -53,4 +56,4 @@ Python 3 with `rich`. On Kali:
 sudo apt install python3-rich aircrack-ng cowpatty iw
 ```
 
-Inside the app, menu **7 — Check / install tools** can install the aircrack-ng tools if they are missing.
+Inside the app, menu **5 — Check / install tools** can install the aircrack-ng tools if they are missing.

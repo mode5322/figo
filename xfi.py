@@ -21,7 +21,6 @@ from rich.live import Live
 from rich.panel import Panel
 from rich.prompt import Confirm, Prompt
 from rich.table import Table
-from rich.text import Text
 
 console = Console()
 
@@ -333,11 +332,7 @@ def menu_value(text: str, set_: bool) -> str:
 
 
 def render_banner(settings: Settings) -> None:
-    title = Text()
-    title.append("XFI", style="bold cyan")
-    title.append("  ·  ", style="dim")
-    title.append("Wireless lab", style="white")
-    console.print(Panel(title, subtitle="Lab console — aircrack-ng capture + crack", border_style="cyan", box=box.DOUBLE))
+    return
 
 
 def render_menu(settings: Settings) -> None:
@@ -355,17 +350,20 @@ def render_menu(settings: Settings) -> None:
     table.add_column("key", style="bold yellow", width=4)
     table.add_column("label")
     table.add_column("value", justify="right", overflow="ellipsis", no_wrap=True)
-    table.add_row("1", "Select a network adapter", adapter)
-    table.add_row("2", "Discover networks and select a test target", target)
-    table.add_row("3", "Select a password wordlist file", word)
-    table.add_row("4", "Show current settings", "")
-    table.add_row("5", "Capture handshake", "")
-    table.add_row("6", "Crack a saved handshake", "")
     missing_n = len(missing_bins())
     tools_status = (
         f"[yellow]{missing_n} missing[/yellow]" if missing_n else "[bold green]all OK[/bold green]"
     )
-    table.add_row("7", "Check / install tools", tools_status)
+    table.add_row("", "[bold]Setup[/bold]", "requirment")
+    table.add_row("1", "Select a network adapter", adapter)
+    table.add_row("2", "Discover networks and select a test target", target)
+    table.add_row("3", "Select a password wordlist file", word)
+    table.add_row("4", "Show current settings", "")
+    table.add_row("5", "Check / install tools", tools_status)
+    table.add_row("--", "[bold][red]------------------------[/red][/bold]", "")
+    table.add_row("", "[bold]Run[/bold]", "")
+    table.add_row("6", "Capture handshake", "")
+    table.add_row("7", "Crack a saved handshake", "")
     console.print(Panel(table, title="Main menu", subtitle="Ctrl+C to exit", border_style="green", box=box.ROUNDED))
 
 
@@ -412,7 +410,7 @@ def require_bins(names: tuple[str, ...]) -> bool:
         "Missing tools",
         "These commands are not installed:\n"
         + ", ".join(f"[bold]{n}[/bold]" for n in missing)
-        + "\n\nChoose [bold]7 — Check / install tools[/bold] to install:\n"
+        + "\n\nChoose [bold]5 — Check / install tools[/bold] to install:\n"
         + ", ".join(pkgs),
     )
     return False
@@ -465,7 +463,7 @@ def action_install_tools() -> None:
     if update.returncode != 0 or install.returncode != 0:
         warn_and_back(
             "Install failed",
-            "apt-get reported an error. Fix the package manager, then try option 7 again.",
+            "apt-get reported an error. Fix the package manager, then try option 5 again.",
         )
         return
 
@@ -1079,7 +1077,7 @@ def action_capture(settings: Settings) -> None:
         console.print(
             Panel(
                 f"Handshake saved:\n[bold]{capfile}[/bold]\n\n"
-                "Use [bold]6 — Crack a saved handshake[/bold] to test the wordlist.",
+                "Use [bold]7 — Crack a saved handshake[/bold] to test the wordlist.",
                 title="Capture complete",
                 border_style="green",
                 box=box.ROUNDED,
@@ -1107,7 +1105,7 @@ def action_crack_saved(settings: Settings) -> None:
         warn_and_back(
             "No capture files",
             f"No .cap / .pcap files found in:\n{handshake_dir}\n\n"
-            "Run [bold]5 — Capture handshake[/bold] first.",
+            "Run [bold]6 — Capture handshake[/bold] first.",
         )
         return
 
@@ -1346,11 +1344,11 @@ def main(argv: Optional[list[str]] = None) -> int:
             elif choice == "4":
                 action_show_settings(settings)
             elif choice == "5":
-                action_capture(settings)
-            elif choice == "6":
-                action_crack_saved(settings)
-            elif choice == "7":
                 action_install_tools()
+            elif choice == "6":
+                action_capture(settings)
+            elif choice == "7":
+                action_crack_saved(settings)
             else:
                 warn_and_back("Unknown option", "Use 1–7. Ctrl+C to exit.")
         except BackToMenu:
