@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""xfi — terminal console for lab Wi‑Fi test setup and aircrack-ng capture."""
+"""figo— A terminal-based Wi-Fi security testing toolkit for authorized lab environments."""
 
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ console = Console()
 class BackToMenu(Exception):
     """Ctrl+C in a submenu returns to the main menu."""
 
-APP_NAME = "xfi"
+APP_NAME = "figo"
 TOOL_DIR = Path(__file__).resolve().parent
 DEFAULT_HANDSHAKE_DIR = str(TOOL_DIR / "handshakes")
 CAPTURE_TIMEOUT_SEC = 90
@@ -662,14 +662,14 @@ def start_airodump(
     except OSError as exc:
         log_fh.close()
         return None, str(exc)
-    proc._xfi_log = log_fh  # type: ignore[attr-defined]
+    proc._figo_log = log_fh  # type: ignore[attr-defined]
     return proc, None
 
 
 def stop_airodump(proc: Optional[subprocess.Popen]) -> None:
     if proc is None:
         return
-    log_fh = getattr(proc, "_xfi_log", None)
+    log_fh = getattr(proc, "_figo_log", None)
     if proc.poll() is None:
         proc.terminate()
         try:

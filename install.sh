@@ -1,23 +1,23 @@
 #!/usr/bin/env bash
-# Install xfi so the command works for both a normal user and root.
+# Install figo so the command works for both a normal user and root.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-LAUNCHER="$ROOT/xfi"
-SYSTEM_BIN="/usr/local/bin/xfi"
+LAUNCHER="$ROOT/figo"
+SYSTEM_BIN="/usr/local/bin/figo"
 
 usage() {
   cat <<'EOF'
 Usage: ./install.sh [--user] [--uninstall]
 
-  (default)  Install system-wide to /usr/local/bin/xfi  (works as user and root)
-  --user     Install to ~/.local/bin/xfi  (current user only; root will not see it)
+  (default)  Install system-wide to /usr/local/bin/figo  (works as user and root)
+  --user     Install to ~/.local/bin/figo  (current user only; root will not see it)
   --uninstall  Remove installed command links
 EOF
 }
 
 user_bin() {
-  echo "${HOME}/.local/bin/xfi"
+  echo "${HOME}/.local/bin/figo"
 }
 
 need_launcher() {
@@ -25,7 +25,7 @@ need_launcher() {
     echo "error: launcher not found: $LAUNCHER" >&2
     exit 1
   fi
-  chmod +x "$LAUNCHER" "$ROOT/xfi.py" 2>/dev/null || true
+  chmod +x "$LAUNCHER" "$ROOT/figo.py" 2>/dev/null || true
 }
 
 link_to() {
@@ -68,13 +68,13 @@ install_system() {
   else
     echo "sudo not found; installing for the current user only." >&2
     link_to "$(user_bin)"
-    echo "warning: root shells will not find 'xfi'. Re-run as root: ./install.sh" >&2
+    echo "warning: root shells will not find 'figo'. Re-run as root: ./install.sh" >&2
     return
   fi
   hash -r 2>/dev/null || true
   echo
   echo "Done. Open a new terminal (or run: hash -r) then:"
-  echo "  xfi"
+  echo "  figo"
 }
 
 install_user() {
