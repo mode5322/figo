@@ -4,7 +4,7 @@ Terminal console for lab Wi-Fi setup, handshake capture, and wordlist cracking (
 
 Use only on networks you own or have permission to test.
 
-## Install (fixes `xfi: command not found`)
+## Install 
 
 ```bash
 git clone https://github.com/mode5322/xfi.git
