@@ -46,9 +46,21 @@ TOOL_PACKAGES = {
     "nmcli": "network-manager",
     "hashcat": "hashcat",
     "hcxpcapngtool": "hcxtools",
+    "hostapd": "hostapd",
+    "dnsmasq": "dnsmasq",
+    "ip": "iproute2",
 }
 REQUIRED_BINS = ("airmon-ng", "airodump-ng", "aireplay-ng", "aircrack-ng")
-OPTIONAL_BINS = ("cowpatty", "iw", "nmcli", "hashcat", "hcxpcapngtool")
+OPTIONAL_BINS = (
+    "cowpatty",
+    "iw",
+    "nmcli",
+    "hashcat",
+    "hcxpcapngtool",
+    "hostapd",
+    "dnsmasq",
+    "ip",
+)
 
 
 def effective_home() -> Path:
@@ -84,6 +96,7 @@ class Settings:
     wordlist: str = ""
     handshake_dir: str = DEFAULT_HANDSHAKE_DIR
     target: Target = field(default_factory=Target)
+    portal: dict = field(default_factory=dict)
 
 
 def load_settings() -> Settings:
@@ -91,12 +104,23 @@ def load_settings() -> Settings:
         return Settings()
     try:
         raw = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
-        target = Target(**raw.get("target", {}))
+        target_raw = raw.get("target", {}) or {}
+        target = Target(
+            ssid=str(target_raw.get("ssid", "") or ""),
+            bssid=str(target_raw.get("bssid", "") or ""),
+            channel=str(target_raw.get("channel", "") or ""),
+            signal=str(target_raw.get("signal", "") or ""),
+            security=str(target_raw.get("security", "") or ""),
+        )
+        portal_raw = raw.get("portal", {}) or {}
+        if not isinstance(portal_raw, dict):
+            portal_raw = {}
         return Settings(
             interface=raw.get("interface", ""),
             wordlist=raw.get("wordlist", ""),
             handshake_dir=raw.get("handshake_dir") or DEFAULT_HANDSHAKE_DIR,
             target=target,
+            portal=portal_raw,
         )
     except (OSError, json.JSONDecodeError, TypeError):
         return Settings()
@@ -104,11 +128,17 @@ def load_settings() -> Settings:
 
 def save_settings(settings: Settings) -> None:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    portal = settings.portal
+    if hasattr(portal, "to_dict"):
+        portal = portal.to_dict()
+    elif not isinstance(portal, dict):
+        portal = {}
     payload = {
         "interface": settings.interface,
         "wordlist": settings.wordlist,
         "handshake_dir": settings.handshake_dir or DEFAULT_HANDSHAKE_DIR,
         "target": asdict(settings.target),
+        "portal": portal,
     }
     CONFIG_FILE.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -376,6 +406,7 @@ def render_menu(settings: Settings) -> None:
     table.add_row("", "[bold]Run[/bold]", "")
     table.add_row("6", "Capture handshake", "")
     table.add_row("7", "Crack a saved handshake", "")
+    table.add_row("8", "Evil Twin Lab", "")
     console.print(Panel(table, title="Main menu", subtitle="Ctrl+C to exit", border_style="green", box=box.ROUNDED))
 
 
@@ -1453,9 +1484,41 @@ def action_show_settings(settings: Settings) -> None:
     sec = settings.target.security or "-"
     table.add_row("Security", f"[yellow]{sec}[/yellow]" if is_wpa3(sec) else sec)
     table.add_row("Handshake dir", settings.handshake_dir or DEFAULT_HANDSHAKE_DIR)
+    portal = settings.portal
+    if hasattr(portal, "to_dict"):
+        portal = portal.to_dict()
+    if not isinstance(portal, dict):
+        portal = {}
+    table.add_row("Awareness portal", "enabled" if portal.get("enabled", True) else "disabled")
+    if portal.get("organization"):
+        table.add_row("Organization", str(portal.get("organization")))
     table.add_row("Config file", str(CONFIG_FILE))
     console.print(table)
     pause()
+
+
+def _evil_twin_api():
+    """Adapter so figolab can reuse Figo UI helpers without a circular import graph."""
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        BackToMenu=BackToMenu,
+        ask=ask,
+        confirm=confirm,
+        pause=pause,
+        warn_and_back=warn_and_back,
+        clear_screen=clear_screen,
+        require_interface=require_interface,
+        scan_networks=scan_networks,
+        save_settings=save_settings,
+        ensure_root=ensure_root,
+    )
+
+
+def action_evil_twin(settings: Settings) -> None:
+    from figolab.evil_twin import action_evil_twin_lab
+
+    action_evil_twin_lab(settings, _evil_twin_api())
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -1473,6 +1536,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             action_crack_saved(settings)
         elif resume == "install":
             action_install_tools()
+        elif resume == "evil_twin":
+            action_evil_twin(settings)
     except BackToMenu:
         pass
     except KeyboardInterrupt:
@@ -1499,8 +1564,10 @@ def main(argv: Optional[list[str]] = None) -> int:
                 action_capture(settings)
             elif choice == "7":
                 action_crack_saved(settings)
+            elif choice == "8":
+                action_evil_twin(settings)
             else:
-                warn_and_back("Unknown option", "Use 1–7. Ctrl+C to exit.")
+                warn_and_back("Unknown option", "Use 1–8. Ctrl+C to exit.")
         except BackToMenu:
             continue
         except KeyboardInterrupt:
