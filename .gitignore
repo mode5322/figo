@@ -1,0 +1,8 @@
+__pycache__/
+*.py[cod]
+*.pyo
+handshakes/
+*.cap
+*.pcap
+.airodump.log
+.DS_Store
