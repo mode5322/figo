@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+*.pyo
+handshakes/
+*.cap
+*.pcap
+*.hc22000
+*.cracked
+.airodump.log
+.DS_Store
