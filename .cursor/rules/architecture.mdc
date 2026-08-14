@@ -1,0 +1,17 @@
+---
+description: Keep ARCHITECTURE.md in sync with every code change
+alwaysApply: true
+---
+
+# Architecture doc maintenance
+
+`ARCHITECTURE.md` is the source of truth for Figo's current structure and behavior.
+
+Whenever you change this repository:
+
+1. Update `ARCHITECTURE.md` in the same change (same commit when possible).
+2. Keep module maps, menu numbers, config keys, data flows, safety rules, and known limitations accurate.
+3. If a module is added, renamed, moved, or deleted, update the layout tree and the module table.
+4. If behavior changes (CLI, capture, cracking, Evil Twin, portal, cleanup, error handling), update the corresponding section.
+5. Bump the "Last updated" date and the git commit note at the top of `ARCHITECTURE.md`.
+6. Do not leave stale paths, menu numbers, or outdated safety claims.
