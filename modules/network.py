@@ -8,6 +8,13 @@ from pathlib import Path
 from typing import Optional
 
 
+def _signal_sort_key(row: dict[str, str]) -> int:
+    try:
+        return int(str(row.get("signal") or "0").strip())
+    except (TypeError, ValueError):
+        return 0
+
+
 def wireless_interfaces() -> list[str]:
     ifaces: list[str] = []
     net = Path("/sys/class/net")
@@ -102,11 +109,13 @@ def scan_networks(interface: str) -> tuple[list[dict[str, str]], Optional[str]]:
                         "security": security or "-",
                     }
                 )
-            rows.sort(key=lambda r: int(r["signal"] or "0"), reverse=True)
+            rows.sort(key=_signal_sort_key, reverse=True)
             return rows, None
         except subprocess.CalledProcessError as exc:
             err = (exc.output or str(exc)).strip()
             return [], err or "Scan failed (nmcli)"
+        except (OSError, ValueError) as exc:
+            return [], f"Scan failed (nmcli): {exc}"
 
     iw = shutil.which("iw")
     if not iw:
@@ -149,6 +158,6 @@ def scan_networks(interface: str) -> tuple[list[dict[str, str]], Optional[str]]:
             current["channel"] = s.rsplit(" ", 1)[-1]
     if current.get("bssid"):
         rows.append(current)
-    rows.sort(key=lambda r: int(r["signal"] or "0"), reverse=True)
+    rows.sort(key=_signal_sort_key, reverse=True)
     return rows, None
 

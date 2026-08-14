@@ -15,6 +15,8 @@ from rich.live import Live
 from rich.panel import Panel
 from rich.table import Table
 
+from modules.exceptions import BackToMenu, ExitApp
+from modules.ui import parse_menu_index
 from modules.figolab.lab_session import (
     LabError,
     cleanup_lab_session,
@@ -28,35 +30,50 @@ console = Console()
 
 def action_evil_twin_lab(settings: Any, api: Any) -> None:
     """Top-level Evil Twin Lab submenu."""
+    run = getattr(api, "run_action", None)
     while True:
-        api.clear_screen()
-        table = Table(show_header=False, box=box.SIMPLE, expand=True, padding=(0, 1))
-        table.add_column("key", style="bold yellow", width=4)
-        table.add_column("label")
-        table.add_row("1", "Wi-Fi Lab")
-        table.add_row("2", "Security Awareness Lab")
-        table.add_row("3", "Configure awareness portal")
-        table.add_row("0", "Back")
-        console.print(
-            Panel(
-                table,
-                title="Evil Twin Lab",
-                subtitle="Authorized lab use only",
-                border_style="cyan",
-                box=box.ROUNDED,
+        try:
+            api.clear_screen()
+            table = Table(show_header=False, box=box.SIMPLE, expand=True, padding=(0, 1))
+            table.add_column("key", style="bold yellow", width=4)
+            table.add_column("label")
+            table.add_row("1", "Wi-Fi Lab")
+            table.add_row("2", "Security Awareness Lab")
+            table.add_row("3", "Configure awareness portal")
+            table.add_row("0", "Back")
+            console.print(
+                Panel(
+                    table,
+                    title="Evil Twin Lab",
+                    subtitle="Authorized lab use only",
+                    border_style="cyan",
+                    box=box.ROUNDED,
+                )
             )
-        )
-        choice = api.ask("Choose a number").strip()
-        if choice == "0" or choice == "":
+            choice = api.ask("Choose a number").strip()
+            if choice in {"0", ""}:
+                return
+            if choice == "1":
+                if run:
+                    run("Wi-Fi Lab", _run_lab_flow, settings, api, mode="wifi")
+                else:
+                    _run_lab_flow(settings, api, mode="wifi")
+            elif choice == "2":
+                if run:
+                    run("Security Awareness Lab", _run_lab_flow, settings, api, mode="awareness")
+                else:
+                    _run_lab_flow(settings, api, mode="awareness")
+            elif choice == "3":
+                if run:
+                    run("Configure awareness portal", _configure_portal, settings, api)
+                else:
+                    _configure_portal(settings, api)
+            else:
+                api.warn_and_back("Unknown option", "Enter 0–3.")
+        except BackToMenu:
             return
-        if choice == "1":
-            _run_lab_flow(settings, api, mode="wifi")
-        elif choice == "2":
-            _run_lab_flow(settings, api, mode="awareness")
-        elif choice == "3":
-            _configure_portal(settings, api)
-        else:
-            api.warn_and_back("Unknown option", "Use 0–3.")
+        except ExitApp:
+            raise
 
 
 def _portal_from_settings(settings: Any) -> PortalConfig:
@@ -97,7 +114,11 @@ def _configure_portal(settings: Any, api: Any) -> None:
         logo_path=logo.strip(),
         session_ttl_sec=portal.session_ttl_sec,
     )
-    api.save_settings(settings)
+    try:
+        api.save_settings(settings)
+    except OSError as exc:
+        api.warn_and_back("Could not save settings", str(exc))
+        return
     console.print("\n[green]Portal configuration saved.[/green]")
     console.print("[dim]Real passwords are never collected or stored.[/dim]")
     api.pause()
@@ -154,12 +175,12 @@ def _pick_target(settings: Any, api: Any) -> Optional[dict[str, str]]:
         )
     console.print(Panel(table, title=f"Authorized target selection · {settings.interface}", border_style="green"))
     choice = api.ask("Target number (Enter to go back)")
-    if not choice.strip():
+    index = parse_menu_index(choice, max_index=len(rows))
+    if index is None:
+        if choice.strip():
+            api.warn_and_back("Invalid choice", "Enter a number from the network list.")
         return None
-    if not choice.isdigit() or not (1 <= int(choice) <= len(rows)):
-        api.warn_and_back("Invalid choice", "Enter a number from the network list.")
-        return None
-    return rows[int(choice) - 1]
+    return rows[index - 1]
 
 
 def _show_target_info(row: dict[str, str], interface: str) -> None:
@@ -224,7 +245,11 @@ def _run_lab_flow(settings: Any, api: Any, *, mode: str) -> None:
     settings.target.channel = row.get("channel", "")
     settings.target.signal = row.get("signal", "")
     settings.target.security = row.get("security", "")
-    api.save_settings(settings)
+    try:
+        api.save_settings(settings)
+    except OSError as exc:
+        api.warn_and_back("Could not save settings", str(exc))
+        return
 
     api.clear_screen()
     _show_target_info(row, settings.interface)
@@ -307,16 +332,20 @@ def _live_dashboard(session, api: Any) -> None:
         if not sys.stdin.isatty():
             time.sleep(timeout)
             return ""
-        fd = sys.stdin.fileno()
-        old = termios.tcgetattr(fd)
         try:
-            tty.setcbreak(fd)
-            ready, _, _ = select.select([sys.stdin], [], [], timeout)
-            if ready:
-                return sys.stdin.read(1)
+            fd = sys.stdin.fileno()
+            old = termios.tcgetattr(fd)
+            try:
+                tty.setcbreak(fd)
+                ready, _, _ = select.select([sys.stdin], [], [], timeout)
+                if ready:
+                    return sys.stdin.read(1)
+                return ""
+            finally:
+                termios.tcsetattr(fd, termios.TCSADRAIN, old)
+        except (OSError, termios.error, ValueError):
+            time.sleep(timeout)
             return ""
-        finally:
-            termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
     try:
         with Live(_dashboard_renderable(session), console=console, refresh_per_second=4) as live:

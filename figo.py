@@ -12,12 +12,13 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from modules.cli import main  # noqa: E402
+from modules.exceptions import ExitApp  # noqa: E402
 from modules.ui import console  # noqa: E402
 
 
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExitApp):
         console.print("\n[dim]Goodbye.[/dim]")
         raise SystemExit(0)

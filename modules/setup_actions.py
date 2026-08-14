@@ -13,7 +13,7 @@ from modules.config import Settings, Target, save_settings
 from modules.constants import CONFIG_FILE, DEFAULT_HANDSHAKE_DIR
 from modules.network import iface_state, scan_networks, wireless_interfaces
 from modules.tools import require_interface
-from modules.ui import ask, clear_screen, console, is_wpa3, pause, render_banner, warn_and_back
+from modules.ui import ask, clear_screen, console, is_wpa3, pause, parse_menu_index, render_banner, warn_and_back
 from modules.wordlists import discover_wordlists, wordlist_info
 
 
@@ -39,14 +39,18 @@ def action_select_interface(settings: Settings) -> None:
     console.print(Panel(table, title="Wireless adapters", border_style="cyan"))
 
     choice = ask("Adapter number (or Enter to go back)")
-    if not choice.strip():
-        return
-    if not choice.isdigit() or not (1 <= int(choice) <= len(ifaces)):
-        warn_and_back("Invalid choice", "Enter a number from the list.")
+    index = parse_menu_index(choice, max_index=len(ifaces))
+    if index is None:
+        if choice.strip():
+            warn_and_back("Invalid choice", "Enter a number from the list.")
         return
 
-    settings.interface = ifaces[int(choice) - 1]
-    save_settings(settings)
+    settings.interface = ifaces[index - 1]
+    try:
+        save_settings(settings)
+    except OSError as exc:
+        warn_and_back("Could not save settings", str(exc))
+        return
     console.print(f"\n[green]Adapter selected:[/green] [bold]{settings.interface}[/bold]")
     pause()
 
@@ -81,7 +85,11 @@ def action_select_wordlist(settings: Settings) -> None:
         return
 
     settings.wordlist = str(path)
-    save_settings(settings)
+    try:
+        save_settings(settings)
+    except OSError as exc:
+        warn_and_back("Could not save settings", str(exc))
+        return
     console.print(f"\n[green]Wordlist selected:[/green] [bold]{path}[/bold]")
     console.print(f"[dim]{wordlist_info(path)}[/dim]")
     pause()
@@ -122,13 +130,13 @@ def action_discover_and_select_target(settings: Settings) -> None:
     console.print(Panel(table, title=f"Networks on {settings.interface}", border_style="green"))
 
     choice = ask("Target number (Enter to go back)")
-    if not choice.strip():
-        return
-    if not choice.isdigit() or not (1 <= int(choice) <= len(rows)):
-        warn_and_back("Invalid choice", "Enter a number from the network list.")
+    index = parse_menu_index(choice, max_index=len(rows))
+    if index is None:
+        if choice.strip():
+            warn_and_back("Invalid choice", "Enter a number from the network list.")
         return
 
-    picked = rows[int(choice) - 1]
+    picked = rows[index - 1]
     settings.target = Target(
         ssid=picked["ssid"],
         bssid=picked["bssid"],
@@ -136,7 +144,11 @@ def action_discover_and_select_target(settings: Settings) -> None:
         signal=picked["signal"],
         security=picked["security"],
     )
-    save_settings(settings)
+    try:
+        save_settings(settings)
+    except OSError as exc:
+        warn_and_back("Could not save settings", str(exc))
+        return
     console.print(
         f"\n[green]Target selected:[/green] [bold]{settings.target.ssid}[/bold] "
         f"[dim]({settings.target.bssid})[/dim]"

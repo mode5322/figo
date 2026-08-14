@@ -68,4 +68,7 @@ def save_settings(settings: Settings) -> None:
         "target": asdict(settings.target),
         "portal": portal,
     }
-    CONFIG_FILE.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    try:
+        CONFIG_FILE.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError as exc:
+        raise OSError(f"Could not write config file {CONFIG_FILE}: {exc}") from exc

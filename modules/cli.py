@@ -9,7 +9,7 @@ from typing import Optional
 from modules.capture import action_capture
 from modules.config import Settings, load_settings, save_settings
 from modules.cracking import action_crack_saved
-from modules.exceptions import BackToMenu
+from modules.exceptions import BackToMenu, ExitApp
 from modules.menu import render_menu
 from modules.network import scan_networks
 from modules.setup_actions import (
@@ -19,13 +19,24 @@ from modules.setup_actions import (
     action_show_settings,
 )
 from modules.tools import action_install_tools, ensure_root, require_interface
-from modules.ui import ask, clear_screen, confirm, console, pause, render_banner, warn_and_back
+from modules.ui import (
+    ask,
+    clear_screen,
+    confirm,
+    console,
+    pause,
+    render_banner,
+    report_error,
+    run_action,
+    warn_and_back,
+)
 
 
 def _evil_twin_api():
     """Adapter so figolab can reuse Figo UI helpers without a circular import graph."""
     return SimpleNamespace(
         BackToMenu=BackToMenu,
+        ExitApp=ExitApp,
         ask=ask,
         confirm=confirm,
         pause=pause,
@@ -35,6 +46,7 @@ def _evil_twin_api():
         scan_networks=scan_networks,
         save_settings=save_settings,
         ensure_root=ensure_root,
+        run_action=run_action,
     )
 
 
@@ -42,6 +54,25 @@ def action_evil_twin(settings: Settings) -> None:
     from modules.figolab.evil_twin import action_evil_twin_lab
 
     action_evil_twin_lab(settings, _evil_twin_api())
+
+
+def _dispatch_choice(settings: Settings, choice: str) -> None:
+    mapping = {
+        "1": ("Select adapter", action_select_interface, (settings,)),
+        "2": ("Discover networks", action_discover_and_select_target, (settings,)),
+        "3": ("Select wordlist", action_select_wordlist, (settings,)),
+        "4": ("Show settings", action_show_settings, (settings,)),
+        "5": ("Check / install tools", action_install_tools, ()),
+        "6": ("Capture handshake", action_capture, (settings,)),
+        "7": ("Crack handshake", action_crack_saved, (settings,)),
+        "8": ("Evil Twin Lab", action_evil_twin, (settings,)),
+    }
+    entry = mapping.get(choice)
+    if entry is None:
+        warn_and_back("Unknown option", "Enter a number from 1 to 8, or press Ctrl+C to exit.")
+        return
+    label, action, args = entry
+    run_action(label, action, *args)
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -54,16 +85,16 @@ def main(argv: Optional[list[str]] = None) -> int:
     settings = load_settings()
     try:
         if resume == "capture":
-            action_capture(settings)
+            run_action("Capture handshake", action_capture, settings)
         elif resume == "crack":
-            action_crack_saved(settings)
+            run_action("Crack handshake", action_crack_saved, settings)
         elif resume == "install":
-            action_install_tools()
+            run_action("Check / install tools", action_install_tools)
         elif resume == "evil_twin":
-            action_evil_twin(settings)
+            run_action("Evil Twin Lab", action_evil_twin, settings)
     except BackToMenu:
         pass
-    except KeyboardInterrupt:
+    except ExitApp:
         console.print("\n[dim]Goodbye.[/dim]")
         return 0
 
@@ -73,27 +104,18 @@ def main(argv: Optional[list[str]] = None) -> int:
             render_banner(settings)
             render_menu(settings)
             choice = ask("Choose a number", exit_on_interrupt=True).strip()
-            if choice == "1":
-                action_select_interface(settings)
-            elif choice == "2":
-                action_discover_and_select_target(settings)
-            elif choice == "3":
-                action_select_wordlist(settings)
-            elif choice == "4":
-                action_show_settings(settings)
-            elif choice == "5":
-                action_install_tools()
-            elif choice == "6":
-                action_capture(settings)
-            elif choice == "7":
-                action_crack_saved(settings)
-            elif choice == "8":
-                action_evil_twin(settings)
-            else:
-                warn_and_back("Unknown option", "Use 1–8. Ctrl+C to exit.")
+            if not choice:
+                continue
+            _dispatch_choice(settings, choice)
         except BackToMenu:
             continue
-        except KeyboardInterrupt:
+        except ExitApp:
             console.print("\n[dim]Goodbye.[/dim]")
             return 0
-
+        except Exception as exc:
+            report_error(
+                "Figo",
+                "An unexpected error occurred.",
+                detail=str(exc).strip() or exc.__class__.__name__,
+            )
+            continue
