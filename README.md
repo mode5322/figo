@@ -12,6 +12,7 @@ figo/
 ├── figo.py              # thin entrypoint
 ├── install.sh
 ├── README.md
+├── ARCHITECTURE.md      # living architecture map
 ├── requirements.txt
 ├── pytest.ini
 ├── modules/             # application modules (split from the old monolith)
@@ -31,6 +32,8 @@ figo/
 ```
 
 Root keeps the normal user-facing files. All library code lives under `modules/`.
+
+Internal structure, data flows, safety rules, and module map: see [`ARCHITECTURE.md`](ARCHITECTURE.md). Update that file whenever the project changes.
 
 ## Install
 
