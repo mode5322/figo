@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-08-15  
 **Repo:** https://github.com/mode5322/Figo  
-**Branch reviewed:** `main` (pending lab-network commit)  
+**Branch reviewed:** `main` (3692a38)  
 **Python LOC (app + tests):** ~3800
 
 This file is the source of truth for how Figo is structured. Update it in the same change whenever code, menus, config, safety rules, or layout change.
