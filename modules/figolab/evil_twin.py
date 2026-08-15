@@ -50,12 +50,11 @@ def action_evil_twin_lab(settings: Any, api: Any) -> None:
             table = Table(show_header=False, box=box.SIMPLE, expand=True, padding=(0, 1))
             table.add_column("key", style="bold yellow", width=4)
             table.add_column("label")
-            table.add_row("1", "Wi-Fi Lab")
-            table.add_row("2", "Security Awareness Lab")
-            table.add_row("3", "Configure awareness portal")
-            table.add_row("4", "Configure lab network (gateway / DHCP / port / SSID)")
-            table.add_row("5", "Dry-run lab setup (show configs, no AP)")
-            table.add_row("6", "Adapter / preflight check")
+            table.add_row("1", "Security Awareness Lab")
+            table.add_row("2", "Configure awareness portal")
+            table.add_row("3", "Configure lab network (gateway / DHCP / port / SSID / security)")
+            table.add_row("4", "Dry-run lab setup (show configs, no AP)")
+            table.add_row("5", "Adapter / preflight check")
             table.add_row("0", "Back")
             console.print(
                 Panel(
@@ -71,36 +70,31 @@ def action_evil_twin_lab(settings: Any, api: Any) -> None:
                 return
             if choice == "1":
                 if run:
-                    run("Wi-Fi Lab", _run_lab_flow, settings, api, mode="wifi")
-                else:
-                    _run_lab_flow(settings, api, mode="wifi")
-            elif choice == "2":
-                if run:
                     run("Security Awareness Lab", _run_lab_flow, settings, api, mode="awareness")
                 else:
                     _run_lab_flow(settings, api, mode="awareness")
-            elif choice == "3":
+            elif choice == "2":
                 if run:
                     run("Configure awareness portal", _configure_portal, settings, api)
                 else:
                     _configure_portal(settings, api)
-            elif choice == "4":
+            elif choice == "3":
                 if run:
                     run("Configure lab network", _configure_lab_network, settings, api)
                 else:
                     _configure_lab_network(settings, api)
-            elif choice == "5":
+            elif choice == "4":
                 if run:
                     run("Dry-run lab setup", _dry_run_lab, settings, api)
                 else:
                     _dry_run_lab(settings, api)
-            elif choice == "6":
+            elif choice == "5":
                 if run:
                     run("Adapter / preflight check", _show_preflight, settings, api)
                 else:
                     _show_preflight(settings, api)
             else:
-                api.warn_and_back("Unknown option", "Enter 0–6.")
+                api.warn_and_back("Unknown option", "Enter 0–5.")
         except BackToMenu:
             return
         except ExitApp:

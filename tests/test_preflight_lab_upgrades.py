@@ -198,3 +198,13 @@ def test_result_page_lists_behaviors_and_warns_on_password():
 
 def test_captive_port_constant():
     assert CAPTIVE_PORT == 80
+
+
+def test_connected_page_does_not_reveal_simulation():
+    html = templates.connected_page(ssid="CorpWiFi", title="Wi-Fi Authentication", organization="Acme")
+    low = html.lower()
+    assert "connected" in low
+    # The client-facing confirmation must not tip off the participant.
+    for giveaway in ("simulation", "awareness", "this was a", "test", "phishing"):
+        assert giveaway not in low
+    assert "CorpWiFi" in html

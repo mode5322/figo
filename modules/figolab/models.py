@@ -228,9 +228,12 @@ def validate_ap_passphrase(passphrase: str) -> tuple[bool, str]:
 class PortalConfig:
     enabled: bool = True
     organization: str = ""
-    portal_title: str = "SECURITY AWARENESS TEST"
+    # Client-facing title. Kept neutral on purpose so the sign-in page looks
+    # like a real network portal — the participant should not realise it is a
+    # simulation until the debrief / manual report.
+    portal_title: str = "Wi-Fi Authentication"
     training_message: str = (
-        "Before continuing, verify your network credentials with your IT team."
+        "Please sign in with your network account to continue."
     )
     security_contact: str = ""
     educational_message: str = (

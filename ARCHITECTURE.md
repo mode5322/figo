@@ -28,8 +28,8 @@ Current product surface:
 | WPA3 handling | Careful | Pure SAE blocked with guidance; mixed WPA2/WPA3 asks confirm |
 | Offline crack (CPU) | Working | `aircrack-ng` (default engine) |
 | Offline crack (GPU) | Optional | `hashcat` if backend already works; **warning only — no driver install** |
-| Evil Twin Wi-Fi Lab | Implemented | Lab AP via `hostapd` + `dnsmasq`; open **or WPA2** (padlock) |
-| Security Awareness Lab | Implemented | Captive portal + sign-in simulation + live behaviour log; **no real password collection** |
+| Security Awareness Lab | Implemented | Lab AP (`hostapd`+`dnsmasq`, open **or WPA2**) + captive portal + sign-in simulation + live behaviour log; **no real password collection** |
+| Blind (no on-screen reveal) | Working | Client sees a neutral sign-in then an ordinary "connected" page; the reveal is deferred to the debrief/manual report |
 | Captive portal auto pop-up | Working | Portal binds port 80 + `portal_port`; catch-all serves sign-in so OS captive assistant opens |
 | Sign-in simulation | Working | Realistic password page; value discarded on submit, only a boolean behaviour recorded |
 | Lab network options | Working | Gateway/DHCP presets, custom prefix/port/SSID, **AP security (open/WPA2)** |
@@ -43,6 +43,7 @@ Current product surface:
 - No cookie/token/browser-credential theft
 - No external exfiltration
 - Awareness portal measures **behavior**, not secrets
+- The client-facing portal may run "blind" (no on-screen reveal) so it matches a real Evil Twin; this is a process choice for authorized assessments and does **not** change credential handling — submitted passwords are still discarded immediately and never stored. The reveal is delivered in an authorized debrief/report.
 - Figo never installs proprietary GPU drivers
 
 ---
@@ -198,14 +199,16 @@ Empty Enter → ignored (no “unknown option”)
 Evil Twin submenu (8):
 
 ```text
-  1  Wi-Fi Lab              (open AP, no portal)
-  2  Security Awareness Lab (open AP + portal)
-  3  Configure awareness portal
-  4  Configure lab network (gateway / DHCP / prefix / port / SSID)
-  5  Dry-run lab setup (show configs, no AP)
-  6  Adapter / preflight check
+  1  Security Awareness Lab (open/WPA2 AP + captive sign-in portal)
+  2  Configure awareness portal
+  3  Configure lab network (gateway / DHCP / prefix / port / SSID / security)
+  4  Dry-run lab setup (show configs, no AP)
+  5  Adapter / preflight check
   0  Back
 ```
+
+The standalone "Wi-Fi Lab" (AP without a portal) was removed: the lab now always
+runs the awareness scenario so it matches a real Evil Twin end-to-end.
 
 ---
 
@@ -308,12 +311,11 @@ GPU alerts show PCI adapters, `nvidia-smi` rows when available, and hashcat back
 Submenu:
 
 ```text
-  1  Wi-Fi Lab
-  2  Security Awareness Lab
-  3  Configure awareness portal (incl. sign-in page toggle)
-  4  Configure lab network (gateway / DHCP / port / SSID / security)
-  5  Dry-run lab setup
-  6  Adapter / preflight check
+  1  Security Awareness Lab
+  2  Configure awareness portal (incl. sign-in page toggle)
+  3  Configure lab network (gateway / DHCP / port / SSID / security)
+  4  Dry-run lab setup
+  5  Adapter / preflight check
   0  Back
 ```
 
@@ -342,13 +344,13 @@ ensure root + hostapd/dnsmasq/iw/ip
   → cleanup_lab_session()  (idempotent)
 ```
 
-Dry-run (submenu 5) builds and displays hostapd/dnsmasq configs without starting processes or changing interfaces.
+Dry-run (submenu 4) builds and displays hostapd/dnsmasq configs without starting processes or changing interfaces.
 
 Live dashboard events (non-sensitive): client connect/leave, portal open, sign-in view, sign-in submission, **password entered (boolean only)**, training, completion.
 
 **Captive portal:** the portal binds port 80 (OS captive-portal probes) plus `portal_port`, and its catch-all handler answers every request with the sign-in page, so the assistant opens automatically on clients. dnsmasq points all DNS at the gateway.
 
-**Sign-in simulation:** when `portal.require_login` is true (default), the landing page is a realistic password form posting to `/login`. The handler reads the password field only to compute `entered_password` (a boolean) and discards the value immediately — it is never stored, logged, hashed, or transmitted. The result page then reveals the simulation and lists the participant's behaviours.
+**Sign-in simulation (blind):** when `portal.require_login` is true (default), the landing page is a neutral, realistic password form posting to `/login`. The handler reads the password field only to compute `entered_password` (a boolean) and discards the value immediately — it is never stored, logged, hashed, or transmitted. The client is then shown an ordinary "You are connected" page (`templates.connected_page`) that does **not** reveal the simulation. The reveal is deferred to the debrief/manual report, using the operator's live-dashboard screenshots and the configured `educational_message`. `templates.result_page` (which lists behaviours and the reveal) is retained for report/debrief use and is not served to clients.
 
 **AP security:** the lab AP defaults to open (`wpa=0`) but can be WPA2-PSK using an admin-set lab passphrase (the AP's own key, shared with participants — never a harvested credential) to avoid the client "insecure network" warning.
 

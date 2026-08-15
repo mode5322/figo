@@ -111,12 +111,11 @@ Inside the app, menu **5 — Check / install tools** can install missing package
 
 Menu **8** opens:
 
-1. **Wi-Fi Lab** — controlled open lab AP (no awareness portal)  
-2. **Security Awareness Lab** — controlled lab AP + local awareness portal  
-3. Configure awareness portal  
-4. Configure lab network (gateway / DHCP / prefix / port / SSID)  
-5. Dry-run lab setup (show configs, no AP)  
-6. Adapter / preflight check  
+1. **Security Awareness Lab** — controlled lab AP + local sign-in portal  
+2. Configure awareness portal  
+3. Configure lab network (gateway / DHCP / prefix / port / SSID / security)  
+4. Dry-run lab setup (show configs, no AP)  
+5. Adapter / preflight check  
 0. Back  
 
 Lab network choices:
@@ -130,7 +129,9 @@ Saved under `lab_network` in `~/.config/figo/config.json`. When starting a lab, 
 
 **Captive portal (auto pop-up):** the awareness portal listens on port **80** (where phones/laptops send captive-portal probes) in addition to the configured `portal_port`, and answers every request with the portal page. This makes the sign-in page appear automatically on connected devices instead of requiring the user to open a browser. dnsmasq resolves all DNS to the lab gateway to support this.
 
-The live Awareness dashboard shows behaviour events (clients, portal opens, sign-in submissions, **passwords entered**, completions) without ever storing passwords.
+**Realistic (blind) scenario:** the client-facing pages are deliberately neutral — a normal-looking Wi-Fi sign-in page, and after submission an ordinary "You are connected" confirmation. They do **not** reveal that this is a simulation. The participant only learns it was an authorized awareness test later, during the **debrief / manual report**, using the operator's screenshots from the live Evil Twin dashboard and the configured educational message. (Credential safety is unchanged — the password is still never stored.)
+
+The live Awareness dashboard shows behaviour events (clients, portal opens, sign-in submissions, **passwords entered**, completions) without ever storing passwords. This dashboard is the source of the screenshots for the manual report.
 
 Hashcat GPU: **warning only**. Figo never installs GPU drivers; CPU (`aircrack-ng`) is the default crack engine.
 
@@ -140,12 +141,14 @@ Workflow (Security Awareness Lab):
 2. Discover nearby networks (reuses Figo scanning)  
 3. Select an **authorized** target  
 4. Review target SSID / BSSID / channel / band / security / signal / interface  
-5. Confirm portal settings  
+5. Confirm portal + network settings (incl. AP security)  
 6. Explicit **Y/N** authorization confirmation (never auto-starts)  
 7. Start controlled lab AP + local portal  
-8. Live Rich dashboard with connected devices / visits / interactions  
-9. Press **S** or **Ctrl+C** to stop  
-10. Full cleanup and best-effort restore of the original interface / NetworkManager state  
+8. Participants connect → neutral sign-in page pops up → they submit → they see a normal "connected" page  
+9. Live Rich dashboard captures their behaviour in real time (this is what you screenshot for the report)  
+10. Press **S** or **Ctrl+C** to stop  
+11. Full cleanup and best-effort restore of the original interface / NetworkManager state  
+12. Debrief the participants afterwards using the report + screenshots  
 
 ## Security Awareness Lab
 
@@ -175,13 +178,13 @@ Non-sensitive metrics only, for example:
 
 ### Sign-in simulation (password field)
 
-To realistically measure behaviour, the portal shows a **sign-in page with a password field** (enable/disable via *Configure awareness portal → Show a sign-in page*). This simulates an employee logging in on an unexpected Wi-Fi page. When the form is submitted:
+To realistically measure behaviour, the portal shows a **neutral sign-in page with a password field** (enable/disable via *Configure awareness portal → Show a sign-in page*). This simulates an employee logging in on an unexpected Wi-Fi page. When the form is submitted:
 
 1. The server reads the password field **only** to compute a single boolean (was it non-empty?), then **immediately discards** the value. It is never stored, logged, hashed, or transmitted.
-2. The participant is redirected to an educational result page that reveals it was a simulation, lists **the behaviours they just performed** (opened the page, submitted the form, typed a password), and warns them.
-3. The tool's live dashboard updates with the behaviour in real time.
+2. The participant is shown an ordinary **"You are connected"** confirmation. The page does **not** reveal that this was a simulation — the reveal is intentionally deferred to the debrief / manual report so employees cannot detect the test from the page itself.
+3. The tool's live dashboard updates with the behaviour in real time (opened the page, submitted the form, typed a password). This is the operator's evidence for the report.
 
-If the sign-in page is disabled, the portal falls back to a behavioural prompt (**“I would enter my password here”**) that never renders a password field. An optional admin-defined **fake training value** may also be configured; submitted input is compared in memory and **never written to logs or disk**.
+If the sign-in page is disabled, the portal falls back to an explicit behavioural prompt (**“I would enter my password here”**) that never renders a password field. An optional admin-defined **fake training value** may also be configured; submitted input is compared in memory and **never written to logs or disk**.
 
 ## Authorized Use
 

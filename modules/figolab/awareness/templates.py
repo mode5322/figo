@@ -159,6 +159,67 @@ def login_page(
 """
 
 
+def connected_page(*, ssid: str, title: str, organization: str) -> str:
+    """
+    Realistic captive-portal "you are connected" confirmation shown AFTER the
+    participant signs in.
+
+    It deliberately does NOT reveal that this was a security-awareness
+    simulation: the reveal happens later, during the debrief / manual report
+    (with screenshots from the live dashboard). The employee should only learn
+    it was a test from their security team, not from this page.
+
+    (Credential safety is unaffected: the submitted password was already
+    discarded server-side before this page is rendered.)
+    """
+    org = f"<p class='muted'>{_e(organization)}</p>" if organization else ""
+    net = f"<div class='ssid'>{_e(ssid)}</div>" if ssid else ""
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>{_e(title)}</title>
+  <style>
+    * {{ box-sizing:border-box; }}
+    body {{
+      margin:0; min-height:100vh; display:grid; place-items:center;
+      font-family:"Segoe UI",system-ui,sans-serif;
+      background:radial-gradient(circle at top,#1c2733,#0f1419); color:#e8eef5;
+    }}
+    .card {{
+      width:min(400px,92vw); background:#1a222c; border:1px solid #2b3642;
+      border-radius:14px; padding:32px 24px; text-align:center;
+      box-shadow:0 20px 50px rgba(0,0,0,.35);
+    }}
+    .check {{
+      width:64px; height:64px; margin:0 auto 14px; border-radius:50%;
+      background:#123524; display:grid; place-items:center;
+      color:#3dd68c; font-size:2rem; border:1px solid #1f5a3c;
+    }}
+    h1 {{ margin:0 0 6px; font-size:1.2rem; }}
+    p {{ line-height:1.5; }}
+    .muted {{ color:#9aa7b5; font-size:.92rem; }}
+    .ssid {{
+      margin:16px 0 4px; padding:12px; font-weight:700; color:#f0b429;
+      border:1px dashed #3a4756; border-radius:10px;
+    }}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="check">&#10003;</div>
+    <h1>You are connected</h1>
+    {org}
+    <p class="muted">Your device now has network access.</p>
+    {net}
+    <p class="muted">You can return to your browser and continue.</p>
+  </div>
+</body>
+</html>
+"""
+
+
 def training_page(*, title: str, has_training_value: bool) -> str:
     field = ""
     if has_training_value:

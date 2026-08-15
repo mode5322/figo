@@ -57,27 +57,19 @@ class AwarenessPortal:
         return f"http://{host}:{port}/"
 
     def _result_body(self, client_session) -> str:
+        """
+        Realistic post–sign-in confirmation shown to the participant.
+
+        The educational reveal is intentionally NOT shown here — it is delivered
+        later during the debrief / manual report using the live dashboard
+        screenshots and the configured ``educational_message``. On-screen the
+        participant only sees an ordinary "connected" page.
+        """
         ctx = templates.render_context(self.config)
-        m = self.metrics.get_session(client_session.session_id)
-        behaviors = ["Connected to the untrusted Wi-Fi network"]
-        entered_password = False
-        if m is not None:
-            if m.viewed_login or m.portal_opened:
-                behaviors.append("Opened the network sign-in page")
-            if m.submitted_login:
-                behaviors.append("Submitted the sign-in form")
-            if m.entered_password:
-                behaviors.append("Typed a password into the sign-in page")
-                entered_password = True
-            if m.security_prompt_interaction and not m.submitted_login:
-                behaviors.append("Interacted with the security prompt")
-        return templates.result_page(
+        return templates.connected_page(
+            ssid=ctx["ssid"],
             title=ctx["title"],
             organization=ctx["organization"],
-            educational_message=ctx["educational_message"],
-            contact=ctx["contact"],
-            behaviors=behaviors,
-            entered_password=entered_password,
         )
 
     def _landing_body(self, session) -> str:
