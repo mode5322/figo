@@ -95,7 +95,9 @@ def prepare_interface(config: LabConfig, snapshot: InterfaceSnapshot) -> None:
     if code != 0:
         raise LabError(f"Failed to bring {iface} up.\n{out}")
 
-    code, out = _run([ip, "addr", "add", f"{config.gateway_ip}/24", "dev", iface])
+    code, out = _run(
+        [ip, "addr", "add", f"{config.gateway_ip}/{int(config.subnet_prefix)}", "dev", iface]
+    )
     if code != 0 and "File exists" not in out:
         raise LabError(
             "Failed to assign lab gateway address.\n"
@@ -262,3 +264,35 @@ def _run(cmd: list[str], timeout: int = 30) -> tuple[int, str]:
         return 127, f"Command not found: {cmd[0]}"
     except subprocess.TimeoutExpired:
         return 1, f"Timed out: {' '.join(cmd)}"
+
+
+def dry_run_lab_configs(config: LabConfig) -> tuple[str, str, str]:
+    """
+    Build hostapd/dnsmasq configs in a temp dir, return (hostapd_text, dnsmasq_text, notes).
+    Does not start any processes. Temp files are removed.
+    """
+    ok, err = config.validate()
+    if not ok:
+        raise LabError(err)
+    missing = detect_lab_dependencies()
+    notes = []
+    if missing:
+        notes.append("Missing tools (dry-run still shows config): " + ", ".join(missing))
+    temp_dir = Path(tempfile.mkdtemp(prefix="figo-lab-dry-"))
+    try:
+        hostapd_path = temp_dir / "hostapd.conf"
+        dnsmasq_path = temp_dir / "dnsmasq.conf"
+        leases_path = temp_dir / "dnsmasq.leases"
+        leases_path.write_text("", encoding="utf-8")
+        build_hostapd_conf(config, hostapd_path)
+        build_dnsmasq_conf(config, dnsmasq_path, leases_path=leases_path)
+        hostapd_text = hostapd_path.read_text(encoding="utf-8")
+        dnsmasq_text = dnsmasq_path.read_text(encoding="utf-8")
+        notes.append(
+            f"SSID={config.effective_ssid()} channel={config.channel} "
+            f"gateway={config.gateway_ip}/{config.subnet_prefix} "
+            f"portal=:{config.portal_port}"
+        )
+        return hostapd_text, dnsmasq_text, "\n".join(notes)
+    finally:
+        _rm_tree(temp_dir)

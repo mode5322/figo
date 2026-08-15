@@ -33,8 +33,12 @@ def missing_bins(names: tuple[str, ...] | None = None) -> list[str]:
 
 def packages_for(bins: list[str]) -> list[str]:
     pkgs: list[str] = []
+    blocked = {"nvidia", "cuda", "nvidia-driver", "nvidia-cuda-toolkit"}
     for name in bins:
         pkg = TOOL_PACKAGES.get(name, name)
+        # Figo must never pull GPU proprietary driver stacks via apt.
+        if pkg.lower() in blocked or pkg.lower().startswith("nvidia-"):
+            continue
         if pkg not in pkgs:
             pkgs.append(pkg)
     return pkgs
@@ -167,6 +171,10 @@ def action_install_tools() -> None:
         return
 
     console.print(f"\nMissing packages: [bold]{' '.join(pkgs)}[/bold]\n")
+    console.print(
+        "[dim]Note: Figo installs tool packages only (e.g. hashcat). "
+        "It never installs NVIDIA/AMD GPU drivers.[/dim]\n"
+    )
     if not confirm("Install with apt-get now?", default=True):
         return
 

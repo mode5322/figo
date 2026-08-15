@@ -2,8 +2,8 @@
 
 **Last updated:** 2026-08-15  
 **Repo:** https://github.com/mode5322/Figo  
-**Branch reviewed:** `main` (18bee0d)  
-**Python LOC (app + tests):** ~4590
+**Branch reviewed:** `main` (pending lab-power-upgrades)  
+**Python LOC (app + tests):** ~4800+
 
 This file is the source of truth for how Figo is structured. Update it in the same change whenever code, menus, config, safety rules, or layout change.
 
@@ -19,15 +19,19 @@ Current product surface:
 
 | Capability | Status | Notes |
 |---|---|---|
-| Adapter selection | Working | `/sys/class/net` then `iw dev` |
+| Adapter selection | Working | Shows capability probe (monitor/AP/managed) after pick |
 | Network discovery + target pick | Working | `nmcli` preferred, `iw scan` fallback |
 | Wordlist selection | Working | Common Kali paths + manual path |
-| Tool check / apt install | Working | Requires root; not silent from Evil Twin menu |
+| Tool check / apt install | Working | Tool packages only — **never NVIDIA/GPU drivers** |
+| Preflight checks | Working | `modules/preflight.py` for capture + lab |
 | Handshake capture (WPA/WPA2) | Working | Monitor + injection + deauth + airodump |
-| Offline crack (CPU) | Working | `aircrack-ng` |
-| Offline crack (GPU) | Optional | `hashcat` + `hcxpcapngtool`; **can break the host if NVIDIA drivers are installed incorrectly** — Figo does not install GPU drivers |
+| WPA3 handling | Careful | Pure SAE blocked with guidance; mixed WPA2/WPA3 asks confirm |
+| Offline crack (CPU) | Working | `aircrack-ng` (default engine) |
+| Offline crack (GPU) | Optional | `hashcat` if backend already works; **warning only — no driver install** |
 | Evil Twin Wi-Fi Lab | Implemented | Open lab AP via `hostapd` + `dnsmasq` |
-| Security Awareness Lab | Implemented | Same AP + local HTTP portal; **no real password collection** |
+| Security Awareness Lab | Implemented | Portal + live event log; **no real password collection** |
+| Lab network options | Working | Gateway/DHCP presets, custom prefix/port/SSID |
+| Dry-run lab setup | Working | Shows hostapd/dnsmasq configs without starting AP |
 | Error handling in menus | Working | EOF/Ctrl+C, empty input, unexpected exceptions shown as panels |
 | Hardware-in-the-loop tests | Not in CI | Unit tests mock subprocesses; no real Wi-Fi adapter in this environment |
 
@@ -37,6 +41,7 @@ Current product surface:
 - No cookie/token/browser-credential theft
 - No external exfiltration
 - Awareness portal measures **behavior**, not secrets
+- Figo never installs proprietary GPU drivers
 
 ---
 
@@ -143,6 +148,7 @@ Figo/
 | `modules/network.py` | Wireless iface list, `nmcli`/`iw` scan, safe signal sort |
 | `modules/wordlists.py` | Discover wordlists under common dirs |
 | `modules/tools.py` | Binary detection, apt install UI, `ensure_root`, readiness checks |
+| `modules/preflight.py` | Adapter capability probe + preflight reports |
 | `modules/setup_actions.py` | Adapter / target / wordlist / show settings |
 
 ### 4.3 Handshake audit
@@ -193,7 +199,9 @@ Evil Twin submenu (8):
   1  Wi-Fi Lab              (open AP, no portal)
   2  Security Awareness Lab (open AP + portal)
   3  Configure awareness portal
-  4  Configure lab network (gateway / DHCP)
+  4  Configure lab network (gateway / DHCP / prefix / port / SSID)
+  5  Dry-run lab setup (show configs, no AP)
+  6  Adapter / preflight check
   0  Back
 ```
 
@@ -231,13 +239,17 @@ Evil Twin submenu (8):
     "preset": "default",
     "gateway_ip": "10.66.66.1",
     "dhcp_range_start": "10.66.66.10",
-    "dhcp_range_end": "10.66.66.100"
+    "dhcp_range_end": "10.66.66.100",
+    "subnet_prefix": "24",
+    "portal_port": "8080",
+    "ap_ssid": ""
   }
 }
 ```
 
 Save failures raise `OSError` and are shown to the user (not a silent crash).
 `lab_network` is optional for backward compatibility; missing key defaults to `10.66.66.x`.
+Empty `ap_ssid` means the lab AP uses the selected target SSID.
 
 ---
 
@@ -297,30 +309,42 @@ Submenu:
 
 Lab network presets (saved under `lab_network` in config.json):
 
-| Choice | Gateway | DHCP |
-|---|---|---|
-| Default | `10.66.66.1` | `10.66.66.10`–`10.66.66.100` |
-| Home-style | `192.168.1.1` | `192.168.1.10`–`192.168.1.100` |
-| Customize | operator-defined | operator-defined (same /24, gateway outside range) |
+| Choice | Gateway | DHCP | Notes |
+|---|---|---|---|
+| Default | `10.66.66.1` | `10.66.66.10`–`10.66.66.100` | Recommended |
+| Home-style | `192.168.1.1` | `192.168.1.10`–`192.168.1.100` | May conflict with real routers |
+| Customize | operator-defined | operator-defined | Also: subnet prefix, portal port, optional lab SSID |
 
 ```text
 ensure root + hostapd/dnsmasq/iw/ip
   → scan (reuse modules.network.scan_networks)
   → pick authorized target
-  → confirm / configure lab network (gateway + DHCP)
+  → confirm / configure lab network (gateway + DHCP + port + SSID)
+  → preflight (AP capability, DNS/portal ports, tools)
   → optional portal config
   → explicit Y/N confirmation (never auto-start)
   → snapshot iface + unmanage NM
-  → assign configured gateway/24
+  → assign configured gateway/prefix
   → hostapd (open AP, wpa=0) + dnsmasq DHCP/DNS
-  → awareness HTTP on gateway:8080 (mode=awareness)
-  → live Rich dashboard; S or Ctrl+C
+  → awareness HTTP on gateway:portal_port (mode=awareness)
+  → live Rich dashboard with event log; S or Ctrl+C
   → cleanup_lab_session()  (idempotent)
 ```
+
+Dry-run (submenu 5) builds and displays hostapd/dnsmasq configs without starting processes or changing interfaces.
+
+Live dashboard events (non-sensitive): client connect/leave, portal open, interaction, training, completion.
 
 Lab AP is **intentionally open**. Awareness happens in the portal, not via a fake WPA password.
 
 `192.168.1.1` may conflict with real home routers; `10.66.66.1` remains the recommended default.
+
+### 7.4 Hashcat GPU policy
+
+- Default crack engine is **aircrack-ng (CPU)**.
+- Hashcat GPU is optional and only runs if `hashcat -I` already shows a usable backend.
+- Figo **never** installs NVIDIA/AMD/CUDA/OpenCL drivers (menu 5 installs tool packages like `hashcat` only).
+- On GPU failure, Figo shows a warning panel and offers CPU fallback.
 
 Cleanup:
 
@@ -384,11 +408,11 @@ No physical Wi-Fi hardware is required. Do not claim over-the-air AP/capture was
 1. `render_banner()` is a no-op.
 2. Lab AP is open (`wpa=0`); it does not clone WPA2 encryption of the target.
 3. Portal `logo_path` is stored but not rendered in HTML yet.
-4. `traceback` is imported in `modules/ui.py` but unused.
-5. Hashcat GPU path can destabilize the **host OS** if the operator installs proprietary NVIDIA drivers incorrectly — outside Figo’s installer.
+4. Pure WPA3/SAE capture remains unsupported (by design); mixed WPA2/WPA3 can continue with an explicit caution.
+5. Hashcat GPU depends on a host backend that the operator already installed; Figo only warns and falls back to CPU.
 6. Real AP-mode / monitor-mode behavior is hardware-specific (USB nl80211 recommended).
 7. `install.sh` does not `chmod` Python modules under `modules/` (not required; they are imported, not executed as scripts).
-8. Clone URL in README still shows `mode5322/figo.git`; GitHub repo is currently `mode5322/Figo`.
+8. Capability probe uses `iw` parsing and may report unknown (`?`) on unusual drivers.
 
 ---
 

@@ -114,16 +114,22 @@ Menu **8** opens:
 1. **Wi-Fi Lab** — controlled open lab AP (no awareness portal)  
 2. **Security Awareness Lab** — controlled lab AP + local awareness portal  
 3. Configure awareness portal  
-4. Configure lab network (gateway / DHCP)  
+4. Configure lab network (gateway / DHCP / prefix / port / SSID)  
+5. Dry-run lab setup (show configs, no AP)  
+6. Adapter / preflight check  
 0. Back  
 
 Lab network choices:
 
 - **Default:** `10.66.66.1` with DHCP `10.66.66.10`–`10.66.66.100` (recommended)
 - **Home-style:** `192.168.1.1` with DHCP `192.168.1.10`–`192.168.1.100` (may conflict with real routers)
-- **Customize:** set gateway IP and DHCP range (same /24; gateway outside the pool)
+- **Customize:** gateway, DHCP range, subnet prefix, portal port, optional lab SSID (training variant)
 
-Saved under `lab_network` in `~/.config/figo/config.json`. When starting a lab, Figo asks to confirm or change the addressing before launch.
+Saved under `lab_network` in `~/.config/figo/config.json`. When starting a lab, Figo asks to confirm or change the addressing before launch, then runs a preflight check.
+
+The live Awareness dashboard shows an event log (clients, portal opens, interactions) without storing passwords.
+
+Hashcat GPU: **warning only**. Figo never installs GPU drivers; CPU (`aircrack-ng`) is the default crack engine.
 
 Workflow (Security Awareness Lab):
 
@@ -198,6 +204,9 @@ Lab addressing is stored under `lab_network`:
 - gateway_ip
 - dhcp_range_start
 - dhcp_range_end
+- subnet_prefix
+- portal_port
+- ap_ssid (optional training SSID; empty = use target SSID)
 
 ## Cleanup
 

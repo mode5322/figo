@@ -108,12 +108,18 @@ LAB_NETWORK_PRESETS: dict[str, dict[str, str]] = {
         "gateway_ip": "10.66.66.1",
         "dhcp_range_start": "10.66.66.10",
         "dhcp_range_end": "10.66.66.100",
+        "subnet_prefix": "24",
+        "portal_port": "8080",
+        "ap_ssid": "",
     },
     "home": {
         "preset": "home",
         "gateway_ip": "192.168.1.1",
         "dhcp_range_start": "192.168.1.10",
         "dhcp_range_end": "192.168.1.100",
+        "subnet_prefix": "24",
+        "portal_port": "8080",
+        "ap_ssid": "",
     },
 }
 
@@ -124,10 +130,21 @@ def normalize_lab_network(raw: Optional[dict[str, Any]] = None) -> dict[str, str
     raw = raw or {}
     preset = str(raw.get("preset", "") or "").strip().lower()
     if preset in LAB_NETWORK_PRESETS and preset != "custom":
-        return dict(LAB_NETWORK_PRESETS[preset])
+        merged = dict(LAB_NETWORK_PRESETS[preset])
+        # Allow overriding port/ssid on top of a named preset.
+        if raw.get("portal_port"):
+            merged["portal_port"] = str(raw.get("portal_port"))
+        if "ap_ssid" in raw:
+            merged["ap_ssid"] = str(raw.get("ap_ssid") or "")
+        if raw.get("subnet_prefix"):
+            merged["subnet_prefix"] = str(raw.get("subnet_prefix"))
+        return merged
     gateway = str(raw.get("gateway_ip", base["gateway_ip"]) or base["gateway_ip"]).strip()
     start = str(raw.get("dhcp_range_start", base["dhcp_range_start"]) or base["dhcp_range_start"]).strip()
     end = str(raw.get("dhcp_range_end", base["dhcp_range_end"]) or base["dhcp_range_end"]).strip()
+    prefix = str(raw.get("subnet_prefix", base["subnet_prefix"]) or base["subnet_prefix"]).strip()
+    port = str(raw.get("portal_port", base["portal_port"]) or base["portal_port"]).strip()
+    ap_ssid = str(raw.get("ap_ssid", "") or "").strip()
     known = next(
         (
             name
@@ -135,6 +152,9 @@ def normalize_lab_network(raw: Optional[dict[str, Any]] = None) -> dict[str, str
             if preset_data["gateway_ip"] == gateway
             and preset_data["dhcp_range_start"] == start
             and preset_data["dhcp_range_end"] == end
+            and not ap_ssid
+            and prefix == "24"
+            and port == "8080"
         ),
         "custom",
     )
@@ -143,7 +163,30 @@ def normalize_lab_network(raw: Optional[dict[str, Any]] = None) -> dict[str, str
         "gateway_ip": gateway,
         "dhcp_range_start": start,
         "dhcp_range_end": end,
+        "subnet_prefix": prefix or "24",
+        "portal_port": port or "8080",
+        "ap_ssid": ap_ssid,
     }
+
+
+def validate_portal_port(port: str | int) -> tuple[bool, str]:
+    try:
+        value = int(str(port).strip())
+    except (TypeError, ValueError):
+        return False, "Portal port must be a number."
+    if not (1 <= value <= 65535):
+        return False, "Portal port must be 1–65535."
+    return True, ""
+
+
+def validate_subnet_prefix(prefix: str | int) -> tuple[bool, str]:
+    try:
+        value = int(str(prefix).strip())
+    except (TypeError, ValueError):
+        return False, "Subnet prefix must be a number."
+    if not (8 <= value <= 30):
+        return False, "Subnet prefix must be between 8 and 30."
+    return True, ""
 
 
 @dataclass
@@ -209,6 +252,7 @@ class LabConfig:
     gateway_ip: str = "10.66.66.1"
     dhcp_range_start: str = "10.66.66.10"
     dhcp_range_end: str = "10.66.66.100"
+    subnet_prefix: int = 24
     portal_port: int = 8080
 
     def effective_ssid(self) -> str:
@@ -230,6 +274,12 @@ class LabConfig:
             self.dhcp_range_start,
             self.dhcp_range_end,
         )
+        if not ok:
+            return False, err
+        ok, err = validate_subnet_prefix(self.subnet_prefix)
+        if not ok:
+            return False, err
+        ok, err = validate_portal_port(self.portal_port)
         if not ok:
             return False, err
         return True, ""
@@ -256,6 +306,7 @@ class LabConfig:
             gateway_ip=str(raw.get("gateway_ip", "10.66.66.1") or "10.66.66.1"),
             dhcp_range_start=str(raw.get("dhcp_range_start", "10.66.66.10") or "10.66.66.10"),
             dhcp_range_end=str(raw.get("dhcp_range_end", "10.66.66.100") or "10.66.66.100"),
+            subnet_prefix=int(raw.get("subnet_prefix", 24) or 24),
             portal_port=int(raw.get("portal_port", 8080) or 8080),
         )
 

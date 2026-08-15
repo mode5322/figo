@@ -52,6 +52,15 @@ def action_select_interface(settings: Settings) -> None:
         warn_and_back("Could not save settings", str(exc))
         return
     console.print(f"\n[green]Adapter selected:[/green] [bold]{settings.interface}[/bold]")
+    try:
+        from modules.preflight import probe_adapter_capabilities
+
+        caps = probe_adapter_capabilities(settings.interface)
+        console.print(f"[dim]{caps.summary_line()}[/dim]")
+        for note in caps.notes:
+            console.print(f"[dim]{note}[/dim]")
+    except Exception:
+        pass
     pause()
 
 

@@ -21,6 +21,7 @@ from modules.figolab.lab_session import (
     LabError,
     cleanup_lab_session,
     detect_lab_dependencies,
+    dry_run_lab_configs,
     start_lab_session,
 )
 from modules.figolab.models import (
@@ -31,7 +32,10 @@ from modules.figolab.models import (
     channel_band,
     normalize_lab_network,
     validate_lab_network,
+    validate_portal_port,
+    validate_subnet_prefix,
 )
+from modules.preflight import format_preflight_report, run_preflight
 
 console = Console()
 
@@ -48,7 +52,9 @@ def action_evil_twin_lab(settings: Any, api: Any) -> None:
             table.add_row("1", "Wi-Fi Lab")
             table.add_row("2", "Security Awareness Lab")
             table.add_row("3", "Configure awareness portal")
-            table.add_row("4", "Configure lab network (gateway / DHCP)")
+            table.add_row("4", "Configure lab network (gateway / DHCP / port / SSID)")
+            table.add_row("5", "Dry-run lab setup (show configs, no AP)")
+            table.add_row("6", "Adapter / preflight check")
             table.add_row("0", "Back")
             console.print(
                 Panel(
@@ -82,8 +88,18 @@ def action_evil_twin_lab(settings: Any, api: Any) -> None:
                     run("Configure lab network", _configure_lab_network, settings, api)
                 else:
                     _configure_lab_network(settings, api)
+            elif choice == "5":
+                if run:
+                    run("Dry-run lab setup", _dry_run_lab, settings, api)
+                else:
+                    _dry_run_lab(settings, api)
+            elif choice == "6":
+                if run:
+                    run("Adapter / preflight check", _show_preflight, settings, api)
+                else:
+                    _show_preflight(settings, api)
             else:
-                api.warn_and_back("Unknown option", "Enter 0–4.")
+                api.warn_and_back("Unknown option", "Enter 0–6.")
         except BackToMenu:
             return
         except ExitApp:
@@ -165,9 +181,29 @@ def _prompt_custom_lab_network(api: Any, current: dict[str, str]) -> Optional[di
         api.ask("DHCP range end", default=current.get("dhcp_range_end", "10.66.66.100")).strip()
         or current.get("dhcp_range_end", "10.66.66.100")
     )
+    prefix = (
+        api.ask("Subnet prefix (CIDR)", default=current.get("subnet_prefix", "24")).strip()
+        or current.get("subnet_prefix", "24")
+    )
+    port = (
+        api.ask("Portal port", default=current.get("portal_port", "8080")).strip()
+        or current.get("portal_port", "8080")
+    )
+    ap_ssid = api.ask(
+        "Lab AP SSID (Enter = use target SSID; optional training variant)",
+        default=current.get("ap_ssid", ""),
+    ).strip()
     ok, err = validate_lab_network(gateway, dhcp_start, dhcp_end)
     if not ok:
         api.warn_and_back("Invalid lab network", err)
+        return None
+    ok, err = validate_subnet_prefix(prefix)
+    if not ok:
+        api.warn_and_back("Invalid subnet prefix", err)
+        return None
+    ok, err = validate_portal_port(port)
+    if not ok:
+        api.warn_and_back("Invalid portal port", err)
         return None
     return normalize_lab_network(
         {
@@ -175,20 +211,25 @@ def _prompt_custom_lab_network(api: Any, current: dict[str, str]) -> Optional[di
             "gateway_ip": gateway,
             "dhcp_range_start": dhcp_start,
             "dhcp_range_end": dhcp_end,
+            "subnet_prefix": prefix,
+            "portal_port": port,
+            "ap_ssid": ap_ssid,
         }
     )
 
 
 def _configure_lab_network(settings: Any, api: Any) -> None:
-    """Menu 8 → 4: choose default / home-style / custom gateway+DHCP."""
+    """Menu 8 → 4: choose default / home-style / custom gateway+DHCP+port+SSID."""
     api.clear_screen()
     current = _lab_network_from_settings(settings)
     console.print(
         Panel(
-            f"Current gateway : {current['gateway_ip']}\n"
+            f"Current gateway : {current['gateway_ip']}/{current.get('subnet_prefix', '24')}\n"
             f"DHCP range      : {current['dhcp_range_start']} – {current['dhcp_range_end']}\n"
+            f"Portal port     : {current.get('portal_port', '8080')}\n"
+            f"Lab AP SSID     : {current.get('ap_ssid') or '(same as target)'}\n"
             f"Preset          : {current.get('preset', 'default')}",
-            title="Lab network (gateway / DHCP)",
+            title="Lab network (gateway / DHCP / port / SSID)",
             border_style="cyan",
         )
     )
@@ -197,7 +238,7 @@ def _configure_lab_network(settings: Any, api: Any) -> None:
     table.add_column("label")
     table.add_row("1", "Default lab network  ·  10.66.66.1  (DHCP 10.66.66.10–100)")
     table.add_row("2", "Home-style network   ·  192.168.1.1  (DHCP 192.168.1.10–100)")
-    table.add_row("3", "Customize gateway IP and DHCP range")
+    table.add_row("3", "Customize gateway, DHCP, prefix, portal port, lab SSID")
     table.add_row("0", "Back / keep current")
     console.print(Panel(table, title="Choose addressing", border_style="green", box=box.ROUNDED))
     if current.get("preset") == "home":
@@ -225,9 +266,58 @@ def _configure_lab_network(settings: Any, api: Any) -> None:
         return
     saved = _lab_network_from_settings(settings)
     console.print(
-        f"\n[green]Lab network saved:[/green] gateway [bold]{saved['gateway_ip']}[/bold] · "
-        f"DHCP {saved['dhcp_range_start']}–{saved['dhcp_range_end']}"
+        f"\n[green]Lab network saved:[/green] gateway [bold]{saved['gateway_ip']}"
+        f"/{saved.get('subnet_prefix', '24')}[/bold] · "
+        f"DHCP {saved['dhcp_range_start']}–{saved['dhcp_range_end']} · "
+        f"portal :{saved.get('portal_port', '8080')}"
     )
+    api.pause()
+
+
+def _show_preflight(settings: Any, api: Any) -> None:
+    if not api.require_interface(settings):
+        return
+    network = _lab_network_from_settings(settings)
+    port = int(network.get("portal_port") or 8080)
+    report = run_preflight(
+        mode="awareness",
+        interface=settings.interface,
+        required_bins=("hostapd", "dnsmasq", "iw", "ip"),
+        portal_port=port,
+        check_ap=True,
+        check_monitor=True,
+        check_dns_port=True,
+        require_root=False,
+    )
+    api.clear_screen()
+    console.print(
+        Panel(
+            format_preflight_report(report),
+            title="Adapter / preflight check",
+            border_style="green" if report.ok else "yellow",
+            box=box.ROUNDED,
+        )
+    )
+    api.pause()
+
+
+def _dry_run_lab(settings: Any, api: Any) -> None:
+    if not api.require_interface(settings):
+        return
+    row = _pick_target(settings, api)
+    if row is None:
+        return
+    config = _build_lab_config(settings, row, "awareness")
+    try:
+        hostapd_text, dnsmasq_text, notes = dry_run_lab_configs(config)
+    except LabError as exc:
+        api.warn_and_back("Dry-run failed", str(exc))
+        return
+    api.clear_screen()
+    console.print(Panel(notes, title="Dry-run summary", border_style="cyan"))
+    console.print(Panel(hostapd_text.strip() or "(empty)", title="hostapd.conf", border_style="green"))
+    console.print(Panel(dnsmasq_text.strip() or "(empty)", title="dnsmasq.conf", border_style="green"))
+    console.print("[dim]No processes started. No interface changes were made.[/dim]")
     api.pause()
 
 
@@ -308,6 +398,7 @@ def _build_lab_config(settings: Any, row: dict[str, str], mode: str) -> LabConfi
     portal = _portal_from_settings(settings)
     portal_enabled = mode == "awareness" and portal.enabled
     network = _lab_network_from_settings(settings)
+    ap_ssid = (network.get("ap_ssid") or "").strip() or row.get("ssid", "")
     return LabConfig(
         target_ssid=row.get("ssid", ""),
         target_bssid=row.get("bssid", ""),
@@ -318,21 +409,25 @@ def _build_lab_config(settings: Any, row: dict[str, str], mode: str) -> LabConfi
         lab_mode=mode,
         portal_enabled=portal_enabled,
         portal=portal,
-        ap_ssid=row.get("ssid", ""),
+        ap_ssid=ap_ssid,
         gateway_ip=network["gateway_ip"],
         dhcp_range_start=network["dhcp_range_start"],
         dhcp_range_end=network["dhcp_range_end"],
+        subnet_prefix=int(network.get("subnet_prefix") or 24),
+        portal_port=int(network.get("portal_port") or 8080),
     )
 
 
 def _confirm_start(config: LabConfig, api: Any) -> bool:
     body = (
-        f"Target SSID : {config.effective_ssid()}\n"
+        f"Target SSID : {config.target_ssid}\n"
+        f"Lab AP SSID : {config.effective_ssid()}\n"
         f"Channel     : {config.channel}\n"
         f"Security    : {config.security}\n"
         f"Interface   : {config.interface}\n"
-        f"Gateway IP  : {config.gateway_ip}\n"
+        f"Gateway IP  : {config.gateway_ip}/{config.subnet_prefix}\n"
         f"DHCP range  : {config.dhcp_range_start} – {config.dhcp_range_end}\n"
+        f"Portal port : {config.portal_port}\n"
         f"Portal      : {'Enabled' if config.portal_enabled else 'Disabled'}\n"
         f"{'─' * 38}\n"
         "This is an authorized security lab.\n"
@@ -371,17 +466,46 @@ def _run_lab_flow(settings: Any, api: Any, *, mode: str) -> None:
     network = _lab_network_from_settings(settings)
     console.print(
         Panel(
-            f"Gateway IP : {network['gateway_ip']}\n"
+            f"Gateway IP : {network['gateway_ip']}/{network.get('subnet_prefix', '24')}\n"
             f"DHCP range : {network['dhcp_range_start']} – {network['dhcp_range_end']}\n"
+            f"Portal port: {network.get('portal_port', '8080')}\n"
+            f"Lab SSID   : {network.get('ap_ssid') or '(same as target)'}\n"
             f"Preset     : {network.get('preset', 'default')}",
             title="Lab network",
             border_style="cyan",
         )
     )
-    if not api.confirm("Use this lab network (gateway / DHCP)?", default=True):
+    if not api.confirm("Use this lab network (gateway / DHCP / port / SSID)?", default=True):
         _configure_lab_network(settings, api)
 
     config = _build_lab_config(settings, row, mode)
+
+    report = run_preflight(
+        mode="awareness" if mode == "awareness" else "lab",
+        interface=settings.interface,
+        required_bins=("hostapd", "dnsmasq", "iw", "ip"),
+        portal_port=config.portal_port,
+        check_ap=True,
+        check_monitor=False,
+        check_dns_port=True,
+        require_root=True,
+    )
+    console.print(
+        Panel(
+            format_preflight_report(report),
+            title="Preflight",
+            border_style="green" if report.ok else "yellow",
+            box=box.ROUNDED,
+        )
+    )
+    if not report.ok:
+        fails = ", ".join(item.name for item in report.blocking_failures())
+        if not api.confirm(
+            f"Preflight reported problems ({fails}). Continue anyway?",
+            default=False,
+        ):
+            return
+
     if mode == "awareness":
         console.print(
             Panel(
@@ -433,16 +557,19 @@ def _dashboard_renderable(session) -> Panel:
     body = (
         f"SSID: {session.config.effective_ssid()}\n"
         f"Channel: {session.config.channel}  ·  Band: {channel_band(session.config.channel)}\n"
-        f"Gateway: {session.config.gateway_ip}\n"
+        f"Gateway: {session.config.gateway_ip}/{session.config.subnet_prefix}\n"
         f"DHCP: {session.config.dhcp_range_start} – {session.config.dhcp_range_end}\n"
         f"AP: {ap}\n"
-        f"Portal: {portal}\n"
+        f"Portal: {portal}  ·  :{session.config.portal_port}\n"
         f"Runtime: {session.runtime_sec()}s\n"
         f"{'─' * 42}\n"
         f"Connected devices : {snap['connected_devices']}\n"
         f"Portal visits     : {snap['portal_visits']}\n"
         f"Interactions      : {snap['interactions']}\n"
-        f"Completed         : {snap['completed']}"
+        f"Completed         : {snap['completed']}\n"
+        f"{'─' * 42}\n"
+        f"[dim]Live events[/dim]\n"
+        f"{_format_events(session.metrics.recent_events(6))}"
     )
     return Panel(
         body,
@@ -451,6 +578,18 @@ def _dashboard_renderable(session) -> Panel:
         border_style="green",
         box=box.ROUNDED,
     )
+
+
+def _format_events(events: list[dict[str, str]]) -> str:
+    if not events:
+        return "[dim](waiting for clients / portal activity)[/dim]"
+    lines: list[str] = []
+    for event in events:
+        ts = (event.get("ts") or "")[-8:]
+        kind = event.get("kind") or "event"
+        message = event.get("message") or ""
+        lines.append(f"{ts} · {kind}: {message}")
+    return "\n".join(lines)
 
 
 def _live_dashboard(session, api: Any) -> None:

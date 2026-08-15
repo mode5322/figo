@@ -180,15 +180,57 @@ def handshake_captured(capfile: Path, bssid: str) -> bool:
 def action_capture(settings: Settings) -> None:
     if not require_capture_ready(settings):
         return
-    if is_wpa3(settings.target.security):
-        warn_and_back(
-            "WPA3 not supported",
-            "The selected network uses WPA3/SAE.\n"
-            "aircrack-ng handshake capture (-a2) does not apply to SAE.\n"
-            "Pick a WPA/WPA2 target from menu [bold]2[/bold].",
-        )
-        return
+
+    from modules.preflight import format_preflight_report, run_preflight
+
+    sec = settings.target.security or ""
+    if is_wpa3(sec):
+        mixed = "wpa2" in sec.lower() and ("wpa3" in sec.lower() or "sae" in sec.lower())
+        if mixed:
+            console.print(
+                Panel(
+                    "This network advertises [bold]WPA2/WPA3 mixed[/bold] mode.\n"
+                    "Figo can try a classic WPA2 handshake capture, but SAE-only clients\n"
+                    "will not produce a crackable WPA2 handshake.\n\n"
+                    "Prefer a pure WPA/WPA2 lab target when possible.",
+                    title="WPA3 caution",
+                    border_style="yellow",
+                )
+            )
+            if not confirm("Continue capture attempt on this mixed target?", default=False):
+                return
+        else:
+            warn_and_back(
+                "WPA3/SAE — limited path",
+                "The selected network looks like [bold]WPA3/SAE[/bold].\n\n"
+                "aircrack-ng handshake capture (-a2) does [bold]not[/bold] apply to SAE.\n"
+                "Figo will not pretend this is a normal WPA2 crack path.\n\n"
+                "What you can do:\n"
+                "• Pick a WPA/WPA2 lab target from menu [bold]2[/bold]\n"
+                "• Or use menu [bold]8 — Evil Twin Lab[/bold] for awareness training\n"
+                "  (open lab AP + portal — no real password collection)",
+            )
+            return
+
     if not ensure_root("capture") or not require_bins(REQUIRED_BINS):
+        return
+
+    report = run_preflight(
+        mode="capture",
+        interface=settings.interface,
+        required_bins=REQUIRED_BINS,
+        check_monitor=True,
+        check_ap=False,
+        require_root=True,
+    )
+    console.print(
+        Panel(
+            format_preflight_report(report),
+            title="Capture preflight",
+            border_style="green" if report.ok else "yellow",
+        )
+    )
+    if not report.ok and not confirm("Preflight reported problems. Continue anyway?", default=False):
         return
 
     handshake_dir = Path(settings.handshake_dir or DEFAULT_HANDSHAKE_DIR)

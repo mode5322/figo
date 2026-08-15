@@ -190,8 +190,9 @@ def format_gpu_info_block(info: GpuInfo) -> str:
 
     if info.backend_error and info.pci_devices and not info.backend_ok:
         lines.append(
-            "\n[dim]A GPU may be present in hardware, but hashcat cannot use it "
-            "until the matching OpenCL/CUDA/HIP runtime and driver are installed.[/dim]"
+            "\n[yellow]Figo will not install GPU drivers or CUDA/OpenCL runtimes.[/yellow]\n"
+            "[dim]If you want hashcat GPU cracking, install drivers yourself outside Figo,\n"
+            "or use aircrack-ng (CPU) instead.[/dim]"
         )
     return "\n".join(lines)
 
@@ -477,23 +478,28 @@ def action_crack_saved(settings: Settings) -> None:
 
     use_hashcat = False
     if which_or_none("hashcat"):
-        console.print("1  aircrack-ng (CPU)")
-        console.print("2  hashcat (GPU)  [default]\n")
+        console.print("1  aircrack-ng (CPU)  [default]")
+        console.print("2  hashcat (GPU)\n")
+        console.print(
+            "[dim]Figo never installs NVIDIA/AMD GPU drivers. "
+            "GPU mode only runs if your host already has a working hashcat backend.[/dim]\n"
+        )
         engine = ask("Engine").strip()
-        use_hashcat = engine in {"", "2"}
+        use_hashcat = engine == "2"
         if engine and engine not in {"1", "2"}:
             warn_and_back("Invalid choice", "Enter 1 or 2.")
             return
 
     if use_hashcat:
         gpu = collect_gpu_info()
-        show_gpu_info_panel(gpu, title="hashcat · GPU check")
+        show_gpu_info_panel(gpu, title="hashcat · GPU check (warning only)")
 
         if not gpu.backend_ok:
             warn_hashcat_gpu(
                 "hashcat GPU unavailable",
-                "hashcat cannot use a GPU backend on this host right now.\n"
-                "Install the correct OpenCL/CUDA/HIP runtime for your card,\n"
+                "hashcat cannot use a GPU backend on this host right now.\n\n"
+                "[bold]Figo will not install GPU drivers.[/bold]\n"
+                "Fix OpenCL/CUDA/HIP yourself outside Figo if you need GPU cracking,\n"
                 "or continue with aircrack-ng (CPU).",
                 gpu,
                 detail=gpu.raw_hashcat_i,
@@ -504,7 +510,7 @@ def action_crack_saved(settings: Settings) -> None:
         elif not which_or_none("hcxpcapngtool"):
             console.print(
                 "[yellow]hcxpcapngtool is missing (needed to convert .cap to hashcat 22000).[/yellow]\n"
-                "Install it from menu [bold]5[/bold], or use CPU now.\n"
+                "Install it from menu [bold]5[/bold] (package only — not GPU drivers), or use CPU now.\n"
             )
             show_gpu_info_panel(gpu, title="hashcat · GPU (ready, conversion blocked)")
             if not confirm("Use aircrack-ng (CPU) instead?", default=True):
@@ -531,7 +537,8 @@ def action_crack_saved(settings: Settings) -> None:
                 if is_error:
                     warn_hashcat_gpu(
                         "hashcat (GPU) failed",
-                        "hashcat stopped with a GPU/backend error before finishing the wordlist.",
+                        "hashcat stopped with a GPU/backend error before finishing the wordlist.\n"
+                        "Figo will not attempt to install or repair GPU drivers.",
                         collect_gpu_info(),
                         detail=out,
                     )

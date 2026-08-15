@@ -65,6 +65,25 @@ class MetricsStore:
         self.interactions: int = 0
         self.completed: int = 0
         self.started_at: float = time.time()
+        self._events: list[dict[str, str]] = []
+        self._prev_connected: int = 0
+
+    def add_event(self, kind: str, message: str) -> None:
+        with self._lock:
+            self._events.append(
+                {
+                    "ts": utc_now_iso(),
+                    "kind": str(kind)[:40],
+                    "message": str(message)[:160],
+                }
+            )
+            # Keep a bounded ring buffer for the live dashboard.
+            if len(self._events) > 200:
+                self._events = self._events[-200:]
+
+    def recent_events(self, limit: int = 6) -> list[dict[str, str]]:
+        with self._lock:
+            return list(self._events[-max(1, int(limit)) :])
 
     def ensure(self, session_id: str) -> SessionMetrics:
         with self._lock:
@@ -78,6 +97,7 @@ class MetricsStore:
             if not m.portal_opened:
                 m.portal_opened = True
                 self.portal_visits += 1
+                self.add_event("portal", f"Portal opened · session {session_id[:8]}")
             return m
 
     def mark_interaction(self, session_id: str) -> SessionMetrics:
@@ -86,12 +106,14 @@ class MetricsStore:
             if not m.security_prompt_interaction:
                 m.security_prompt_interaction = True
                 self.interactions += 1
+                self.add_event("interact", f"Security prompt interaction · {session_id[:8]}")
             return m
 
     def mark_training(self, session_id: str) -> SessionMetrics:
         with self._lock:
             m = self.ensure(session_id)
             m.training_action = True
+            self.add_event("training", f"Training action · {session_id[:8]}")
             return m
 
     def mark_completed(self, session_id: str) -> SessionMetrics:
@@ -100,11 +122,25 @@ class MetricsStore:
             if not m.completed:
                 m.completed = True
                 self.completed += 1
+                self.add_event("complete", f"Session completed · {session_id[:8]}")
             return m
 
     def set_connected_devices(self, count: int) -> None:
         with self._lock:
-            self.connected_devices = max(0, int(count))
+            count = max(0, int(count))
+            if count > self._prev_connected:
+                delta = count - self._prev_connected
+                self.add_event(
+                    "client",
+                    f"+{delta} client(s) · connected devices now {count}",
+                )
+            elif count < self._prev_connected:
+                self.add_event(
+                    "client",
+                    f"Client left · connected devices now {count}",
+                )
+            self.connected_devices = count
+            self._prev_connected = count
 
     def snapshot(self) -> dict[str, Any]:
         with self._lock:
@@ -115,6 +151,7 @@ class MetricsStore:
                 "completed": self.completed,
                 "runtime_sec": int(time.time() - self.started_at),
                 "sessions": [m.to_dict() for m in self._by_session.values()],
+                "events": list(self._events[-20:]),
             }
             assert_no_sensitive_payload(payload)
             for item in payload["sessions"]:
@@ -132,6 +169,8 @@ class MetricsStore:
             self.interactions = 0
             self.completed = 0
             self.started_at = time.time()
+            self._events.clear()
+            self._prev_connected = 0
 
 
 def safe_record_interaction(
