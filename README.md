@@ -124,10 +124,13 @@ Lab network choices:
 - **Default:** `10.66.66.1` with DHCP `10.66.66.10`–`10.66.66.100` (recommended)
 - **Home-style:** `192.168.1.1` with DHCP `192.168.1.10`–`192.168.1.100` (may conflict with real routers)
 - **Customize:** gateway, DHCP range, subnet prefix, portal port, optional lab SSID (training variant)
+- **AP security:** **open** (default) or **WPA2** with a lab passphrase you set and share with participants. WPA2 shows a padlock and removes the client "insecure / open network" warning, making the assessment more credible. The passphrase is the lab AP's own key — it is never a harvested credential.
 
 Saved under `lab_network` in `~/.config/figo/config.json`. When starting a lab, Figo asks to confirm or change the addressing before launch, then runs a preflight check.
 
-The live Awareness dashboard shows an event log (clients, portal opens, interactions) without storing passwords.
+**Captive portal (auto pop-up):** the awareness portal listens on port **80** (where phones/laptops send captive-portal probes) in addition to the configured `portal_port`, and answers every request with the portal page. This makes the sign-in page appear automatically on connected devices instead of requiring the user to open a browser. dnsmasq resolves all DNS to the lab gateway to support this.
+
+The live Awareness dashboard shows behaviour events (clients, portal opens, sign-in submissions, **passwords entered**, completions) without ever storing passwords.
 
 Hashcat GPU: **warning only**. Figo never installs GPU drivers; CPU (`aircrack-ng`) is the default crack engine.
 
@@ -156,6 +159,8 @@ Non-sensitive metrics only, for example:
 
 - connected device count (DHCP leases)
 - portal visits
+- sign-in page views and form submissions
+- whether a password field was left non-empty (a **boolean only** — never the value)
 - security prompt interactions
 - training completion flags
 - temporary random session IDs (expire automatically)
@@ -168,8 +173,15 @@ Non-sensitive metrics only, for example:
 - credential forwarding or exfiltration
 - external telemetry services
 
-The portal UI uses behavioral actions such as **“I would enter my password here”**.  
-It does **not** ask for a real password. An optional admin-defined **fake training value** may be configured; submitted input is compared in memory and **never written to logs or disk**.
+### Sign-in simulation (password field)
+
+To realistically measure behaviour, the portal shows a **sign-in page with a password field** (enable/disable via *Configure awareness portal → Show a sign-in page*). This simulates an employee logging in on an unexpected Wi-Fi page. When the form is submitted:
+
+1. The server reads the password field **only** to compute a single boolean (was it non-empty?), then **immediately discards** the value. It is never stored, logged, hashed, or transmitted.
+2. The participant is redirected to an educational result page that reveals it was a simulation, lists **the behaviours they just performed** (opened the page, submitted the form, typed a password), and warns them.
+3. The tool's live dashboard updates with the behaviour in real time.
+
+If the sign-in page is disabled, the portal falls back to a behavioural prompt (**“I would enter my password here”**) that never renders a password field. An optional admin-defined **fake training value** may also be configured; submitted input is compared in memory and **never written to logs or disk**.
 
 ## Authorized Use
 
@@ -207,6 +219,13 @@ Lab addressing is stored under `lab_network`:
 - subnet_prefix
 - portal_port
 - ap_ssid (optional training SSID; empty = use target SSID)
+- ap_security (`open` or `wpa2`)
+- ap_passphrase (lab AP WPA2 key when `ap_security = wpa2`)
+
+Portal sign-in options under `portal`:
+
+- require_login (show the sign-in page with a password field)
+- login_username_label / login_password_label / login_button_label
 
 ## Cleanup
 
@@ -233,8 +252,11 @@ Possible causes:
 - another process is using the interface
 - NetworkManager still managing the interface
 
-**Portal not reachable**  
-Clients must join the lab SSID. Portal binds to the configured lab gateway IP (default `10.66.66.1:8080`, or `192.168.1.1:8080` / custom if selected). DNS is redirected locally via dnsmasq for captive-portal style discovery.
+**Portal not reachable / does not pop up**  
+Clients must join the lab SSID. The portal binds to the lab gateway IP on port **80** (captive-portal detection) plus the configured `portal_port` (default `8080`). DNS is redirected locally via dnsmasq so OS captive-portal probes reach the portal and the sign-in page opens automatically. If port 80 is already in use on the host, the portal still serves on `portal_port` but the automatic pop-up may not trigger — free port 80 or open `http://<gateway-ip>/` manually.
+
+**Network shows as "insecure / open"**  
+Open APs always warn on clients. Set **AP security → WPA2** in *Configure lab network* and share the lab passphrase with participants to show a padlock and remove the warning.
 
 **Ctrl+C did not restore Wi-Fi**  
 Re-run cleanup by starting/stopping the lab again, or manually: `nmcli device set <iface> managed yes` and reconnect.

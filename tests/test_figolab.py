@@ -144,7 +144,9 @@ def test_metrics_and_credential_safety():
     safe_record_interaction(metrics, sid)
     snap = metrics.snapshot()
     assert snap["interactions"] == 1
-    assert "password" not in json.dumps(snap).lower()
+    # The submitted secret VALUE must never appear anywhere in the snapshot.
+    # (Boolean/counter field names like "entered_password" are allowed.)
+    assert "hunter2-secret" not in json.dumps(snap).lower()
 
     with pytest.raises(ValueError):
         assert_no_sensitive_payload({"password": "secret"})

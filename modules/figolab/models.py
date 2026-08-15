@@ -111,6 +111,8 @@ LAB_NETWORK_PRESETS: dict[str, dict[str, str]] = {
         "subnet_prefix": "24",
         "portal_port": "8080",
         "ap_ssid": "",
+        "ap_security": "open",
+        "ap_passphrase": "",
     },
     "home": {
         "preset": "home",
@@ -120,6 +122,8 @@ LAB_NETWORK_PRESETS: dict[str, dict[str, str]] = {
         "subnet_prefix": "24",
         "portal_port": "8080",
         "ap_ssid": "",
+        "ap_security": "open",
+        "ap_passphrase": "",
     },
 }
 
@@ -129,15 +133,23 @@ def normalize_lab_network(raw: Optional[dict[str, Any]] = None) -> dict[str, str
     base = dict(LAB_NETWORK_PRESETS["default"])
     raw = raw or {}
     preset = str(raw.get("preset", "") or "").strip().lower()
+    ap_security = str(raw.get("ap_security", "open") or "open").strip().lower()
+    if ap_security not in AP_SECURITY_MODES:
+        ap_security = "open"
+    ap_passphrase = str(raw.get("ap_passphrase", "") or "")
+    if ap_security != "wpa2":
+        ap_passphrase = ""
     if preset in LAB_NETWORK_PRESETS and preset != "custom":
         merged = dict(LAB_NETWORK_PRESETS[preset])
-        # Allow overriding port/ssid on top of a named preset.
+        # Allow overriding port/ssid/security on top of a named preset.
         if raw.get("portal_port"):
             merged["portal_port"] = str(raw.get("portal_port"))
         if "ap_ssid" in raw:
             merged["ap_ssid"] = str(raw.get("ap_ssid") or "")
         if raw.get("subnet_prefix"):
             merged["subnet_prefix"] = str(raw.get("subnet_prefix"))
+        merged["ap_security"] = ap_security
+        merged["ap_passphrase"] = ap_passphrase
         return merged
     gateway = str(raw.get("gateway_ip", base["gateway_ip"]) or base["gateway_ip"]).strip()
     start = str(raw.get("dhcp_range_start", base["dhcp_range_start"]) or base["dhcp_range_start"]).strip()
@@ -155,6 +167,7 @@ def normalize_lab_network(raw: Optional[dict[str, Any]] = None) -> dict[str, str
             and not ap_ssid
             and prefix == "24"
             and port == "8080"
+            and ap_security == "open"
         ),
         "custom",
     )
@@ -166,6 +179,8 @@ def normalize_lab_network(raw: Optional[dict[str, Any]] = None) -> dict[str, str
         "subnet_prefix": prefix or "24",
         "portal_port": port or "8080",
         "ap_ssid": ap_ssid,
+        "ap_security": ap_security,
+        "ap_passphrase": ap_passphrase,
     }
 
 
@@ -186,6 +201,26 @@ def validate_subnet_prefix(prefix: str | int) -> tuple[bool, str]:
         return False, "Subnet prefix must be a number."
     if not (8 <= value <= 30):
         return False, "Subnet prefix must be between 8 and 30."
+    return True, ""
+
+
+AP_SECURITY_MODES = {"open", "wpa2"}
+
+
+def validate_ap_security(mode: str) -> tuple[bool, str]:
+    value = (mode or "open").strip().lower()
+    if value not in AP_SECURITY_MODES:
+        return False, "AP security must be 'open' or 'wpa2'."
+    return True, ""
+
+
+def validate_ap_passphrase(passphrase: str) -> tuple[bool, str]:
+    """Validate the lab AP's OWN WPA2 key (chosen by the admin, not harvested)."""
+    value = passphrase or ""
+    if not (8 <= len(value) <= 63):
+        return False, "WPA2 passphrase must be 8–63 characters."
+    if any(ord(ch) < 32 or ord(ch) > 126 for ch in value):
+        return False, "WPA2 passphrase must use printable ASCII characters."
     return True, ""
 
 
@@ -212,6 +247,12 @@ class PortalConfig:
     training_value: str = ""
     logo_path: str = ""
     session_ttl_sec: int = 3600
+    # Show a realistic sign-in page with a password field. The submitted value
+    # is NEVER stored, logged, or transmitted — only the behaviour is recorded.
+    require_login: bool = True
+    login_username_label: str = "Username / Email"
+    login_password_label: str = "Wi-Fi / Network password"
+    login_button_label: str = "Sign in"
 
     @classmethod
     def from_dict(cls, raw: Optional[dict[str, Any]]) -> "PortalConfig":
@@ -231,6 +272,18 @@ class PortalConfig:
             training_value=str(raw.get("training_value", "") or ""),
             logo_path=str(raw.get("logo_path", "") or ""),
             session_ttl_sec=int(raw.get("session_ttl_sec", 3600) or 3600),
+            require_login=bool(raw.get("require_login", True)),
+            login_username_label=str(
+                raw.get("login_username_label", cls.login_username_label)
+                or cls.login_username_label
+            ),
+            login_password_label=str(
+                raw.get("login_password_label", cls.login_password_label)
+                or cls.login_password_label
+            ),
+            login_button_label=str(
+                raw.get("login_button_label", cls.login_button_label) or cls.login_button_label
+            ),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -254,9 +307,16 @@ class LabConfig:
     dhcp_range_end: str = "10.66.66.100"
     subnet_prefix: int = 24
     portal_port: int = 8080
+    # Lab AP link-layer security. "open" (default) or "wpa2" with a lab
+    # passphrase the admin sets and shares with authorized participants.
+    ap_security: str = "open"
+    ap_passphrase: str = ""
 
     def effective_ssid(self) -> str:
         return (self.ap_ssid or self.target_ssid or "").strip()
+
+    def is_secured(self) -> bool:
+        return (self.ap_security or "open").strip().lower() == "wpa2"
 
     def validate(self) -> tuple[bool, str]:
         ok, err = validate_ssid(self.effective_ssid())
@@ -282,6 +342,13 @@ class LabConfig:
         ok, err = validate_portal_port(self.portal_port)
         if not ok:
             return False, err
+        ok, err = validate_ap_security(self.ap_security)
+        if not ok:
+            return False, err
+        if self.is_secured():
+            ok, err = validate_ap_passphrase(self.ap_passphrase)
+            if not ok:
+                return False, err
         return True, ""
 
     def to_dict(self) -> dict[str, Any]:
@@ -308,6 +375,8 @@ class LabConfig:
             dhcp_range_end=str(raw.get("dhcp_range_end", "10.66.66.100") or "10.66.66.100"),
             subnet_prefix=int(raw.get("subnet_prefix", 24) or 24),
             portal_port=int(raw.get("portal_port", 8080) or 8080),
+            ap_security=str(raw.get("ap_security", "open") or "open").strip().lower(),
+            ap_passphrase=str(raw.get("ap_passphrase", "") or ""),
         )
 
 

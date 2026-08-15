@@ -28,9 +28,11 @@ Current product surface:
 | WPA3 handling | Careful | Pure SAE blocked with guidance; mixed WPA2/WPA3 asks confirm |
 | Offline crack (CPU) | Working | `aircrack-ng` (default engine) |
 | Offline crack (GPU) | Optional | `hashcat` if backend already works; **warning only — no driver install** |
-| Evil Twin Wi-Fi Lab | Implemented | Open lab AP via `hostapd` + `dnsmasq` |
-| Security Awareness Lab | Implemented | Portal + live event log; **no real password collection** |
-| Lab network options | Working | Gateway/DHCP presets, custom prefix/port/SSID |
+| Evil Twin Wi-Fi Lab | Implemented | Lab AP via `hostapd` + `dnsmasq`; open **or WPA2** (padlock) |
+| Security Awareness Lab | Implemented | Captive portal + sign-in simulation + live behaviour log; **no real password collection** |
+| Captive portal auto pop-up | Working | Portal binds port 80 + `portal_port`; catch-all serves sign-in so OS captive assistant opens |
+| Sign-in simulation | Working | Realistic password page; value discarded on submit, only a boolean behaviour recorded |
+| Lab network options | Working | Gateway/DHCP presets, custom prefix/port/SSID, **AP security (open/WPA2)** |
 | Dry-run lab setup | Working | Shows hostapd/dnsmasq configs without starting AP |
 | Error handling in menus | Working | EOF/Ctrl+C, empty input, unexpected exceptions shown as panels |
 | Hardware-in-the-loop tests | Not in CI | Unit tests mock subprocesses; no real Wi-Fi adapter in this environment |
@@ -166,13 +168,13 @@ Figo/
 | `evil_twin.py` | Submenu: Wi-Fi Lab / Awareness Lab / portal config |
 | `models.py` | `LabConfig`, `PortalConfig`, SSID/channel validation, lab bins |
 | `lab_session.py` | Prepare iface, start hostapd/dnsmasq/portal, `cleanup_lab_session()` |
-| `ap.py` | Write **open** hostapd + dnsmasq configs into tempfile dir |
+| `ap.py` | Write hostapd (open **or WPA2-PSK**) + dnsmasq configs into tempfile dir |
 | `interface.py` | Snapshot operstate/mode/addrs/NM; restore after lab |
 | `processes.py` | Track only Figo-started children; SIGTERM then kill |
-| `awareness/portal.py` | Local HTTP awareness pages; no password field |
+| `awareness/portal.py` | Local HTTP portal; binds port 80 + `portal_port`; catch-all serves sign-in; `/login` discards password value, records boolean behaviour only |
 | `awareness/session.py` | UUID-like `secrets.token_urlsafe` sessions with TTL |
-| `awareness/metrics.py` | In-memory counters; refuse sensitive keys |
-| `awareness/templates.py` | HTML landing/result pages |
+| `awareness/metrics.py` | In-memory counters (incl. `login_submissions`, `passwords_entered`); refuse sensitive keys |
+| `awareness/templates.py` | HTML sign-in / landing / result pages (result lists recorded behaviours) |
 
 ---
 
@@ -233,7 +235,11 @@ Evil Twin submenu (8):
     "educational_message": "...",
     "training_value": "",
     "logo_path": "",
-    "session_ttl_sec": 3600
+    "session_ttl_sec": 3600,
+    "require_login": true,
+    "login_username_label": "Username / Email",
+    "login_password_label": "Wi-Fi / Network password",
+    "login_button_label": "Sign in"
   },
   "lab_network": {
     "preset": "default",
@@ -242,7 +248,9 @@ Evil Twin submenu (8):
     "dhcp_range_end": "10.66.66.100",
     "subnet_prefix": "24",
     "portal_port": "8080",
-    "ap_ssid": ""
+    "ap_ssid": "",
+    "ap_security": "open",
+    "ap_passphrase": ""
   }
 }
 ```
@@ -302,8 +310,10 @@ Submenu:
 ```text
   1  Wi-Fi Lab
   2  Security Awareness Lab
-  3  Configure awareness portal
-  4  Configure lab network (gateway / DHCP)
+  3  Configure awareness portal (incl. sign-in page toggle)
+  4  Configure lab network (gateway / DHCP / port / SSID / security)
+  5  Dry-run lab setup
+  6  Adapter / preflight check
   0  Back
 ```
 
@@ -314,28 +324,33 @@ Lab network presets (saved under `lab_network` in config.json):
 | Default | `10.66.66.1` | `10.66.66.10`–`10.66.66.100` | Recommended |
 | Home-style | `192.168.1.1` | `192.168.1.10`–`192.168.1.100` | May conflict with real routers |
 | Customize | operator-defined | operator-defined | Also: subnet prefix, portal port, optional lab SSID |
+| AP security | open / WPA2 | — | WPA2 uses an admin-set lab passphrase (padlock; removes "insecure" warning) |
 
 ```text
 ensure root + hostapd/dnsmasq/iw/ip
   → scan (reuse modules.network.scan_networks)
   → pick authorized target
-  → confirm / configure lab network (gateway + DHCP + port + SSID)
+  → confirm / configure lab network (gateway + DHCP + port + SSID + security)
   → preflight (AP capability, DNS/portal ports, tools)
   → optional portal config
   → explicit Y/N confirmation (never auto-start)
   → snapshot iface + unmanage NM
   → assign configured gateway/prefix
-  → hostapd (open AP, wpa=0) + dnsmasq DHCP/DNS
-  → awareness HTTP on gateway:portal_port (mode=awareness)
-  → live Rich dashboard with event log; S or Ctrl+C
+  → hostapd (open wpa=0, or WPA2-PSK with lab passphrase) + dnsmasq DHCP/DNS
+  → awareness HTTP on gateway:80 (captive) + gateway:portal_port (mode=awareness)
+  → live Rich dashboard with behaviour log; S or Ctrl+C
   → cleanup_lab_session()  (idempotent)
 ```
 
 Dry-run (submenu 5) builds and displays hostapd/dnsmasq configs without starting processes or changing interfaces.
 
-Live dashboard events (non-sensitive): client connect/leave, portal open, interaction, training, completion.
+Live dashboard events (non-sensitive): client connect/leave, portal open, sign-in view, sign-in submission, **password entered (boolean only)**, training, completion.
 
-Lab AP is **intentionally open**. Awareness happens in the portal, not via a fake WPA password.
+**Captive portal:** the portal binds port 80 (OS captive-portal probes) plus `portal_port`, and its catch-all handler answers every request with the sign-in page, so the assistant opens automatically on clients. dnsmasq points all DNS at the gateway.
+
+**Sign-in simulation:** when `portal.require_login` is true (default), the landing page is a realistic password form posting to `/login`. The handler reads the password field only to compute `entered_password` (a boolean) and discards the value immediately — it is never stored, logged, hashed, or transmitted. The result page then reveals the simulation and lists the participant's behaviours.
+
+**AP security:** the lab AP defaults to open (`wpa=0`) but can be WPA2-PSK using an admin-set lab passphrase (the AP's own key, shared with participants — never a harvested credential) to avoid the client "insecure network" warning.
 
 `192.168.1.1` may conflict with real home routers; `10.66.66.1` remains the recommended default.
 
@@ -394,7 +409,8 @@ python3 -m pytest
 
 | File | Covers |
 |---|---|
-| `tests/test_figolab.py` | SSID/channel validation, hostapd/dnsmasq generation, dependency mock, sessions, metrics credential-safety, process tracker, cleanup idempotence, config backward compatibility, landing HTML has no password field |
+| `tests/test_figolab.py` | SSID/channel validation, hostapd/dnsmasq generation, dependency mock, sessions, metrics credential-safety (submitted value never retained), process tracker, cleanup idempotence, config backward compatibility |
+| `tests/test_preflight_lab_upgrades.py` | Preflight/adapter probe, dry-run, WPA2 vs open hostapd, AP passphrase validation, sign-in page markup, `/login` records boolean behaviour (never the value), captive port constant |
 | `tests/test_stations.py` | airodump CSV associated-station parsing for capture summary |
 | `tests/test_gpu_info.py` | hashcat `-I` backend parse + GPU alert text for menu 7 |
 | `tests/test_ui_errors.py` | `parse_menu_index`, EOF/Ctrl+C → BackToMenu/ExitApp, `run_action` swallows unexpected errors |

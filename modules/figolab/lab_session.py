@@ -288,10 +288,12 @@ def dry_run_lab_configs(config: LabConfig) -> tuple[str, str, str]:
         build_dnsmasq_conf(config, dnsmasq_path, leases_path=leases_path)
         hostapd_text = hostapd_path.read_text(encoding="utf-8")
         dnsmasq_text = dnsmasq_path.read_text(encoding="utf-8")
+        security = "WPA2 (secured)" if config.is_secured() else "open"
         notes.append(
             f"SSID={config.effective_ssid()} channel={config.channel} "
+            f"security={security} "
             f"gateway={config.gateway_ip}/{config.subnet_prefix} "
-            f"portal=:{config.portal_port}"
+            f"portal=:80 (captive) + :{config.portal_port}"
         )
         return hostapd_text, dnsmasq_text, "\n".join(notes)
     finally:

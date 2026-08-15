@@ -19,6 +19,9 @@ class ClientSession:
     created_at: float = field(default_factory=time.time)
     expires_at: float = 0.0
     portal_opened: bool = False
+    viewed_login: bool = False
+    submitted_login: bool = False
+    entered_password: bool = False
     security_prompt_interaction: bool = False
     training_action: bool = False
     completed: bool = False

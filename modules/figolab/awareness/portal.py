@@ -1,4 +1,24 @@
-"""Local Security Awareness Portal HTTP server."""
+"""Local Security Awareness Portal HTTP server.
+
+Captive-portal behaviour
+------------------------
+Phones and laptops decide a network "has no internet / needs sign-in" by
+probing well-known URLs (Apple ``captive.apple.com``, Android
+``connectivitycheck.gstatic.com/generate_204``, Windows ``msftconnecttest``).
+dnsmasq resolves every hostname to the lab gateway, so those probes reach this
+server. To make the sign-in page pop up automatically we:
+
+* listen on **port 80** (where the OS probes go) in addition to the configured
+  portal port, and
+* answer *every* request with the portal page (instead of the "Success" body
+  the OS expects), which triggers the captive-portal assistant on the client.
+
+Credential safety
+-----------------
+The sign-in form posts to ``/login``. The submitted password is read only to
+compute a single boolean (was the field non-empty?) and is then discarded. It
+is never stored, logged, hashed, or transmitted anywhere.
+"""
 
 from __future__ import annotations
 
@@ -14,20 +34,72 @@ from modules.figolab.awareness.session import SessionStore
 if TYPE_CHECKING:
     from modules.figolab.models import LabConfig
 
+# Standard port used by OS captive-portal probes.
+CAPTIVE_PORT = 80
+
 
 class AwarenessPortal:
     def __init__(self, config: "LabConfig", metrics: MetricsStore, sessions: SessionStore) -> None:
         self.config = config
         self.metrics = metrics
         self.sessions = sessions
-        self._httpd: Optional[ThreadingHTTPServer] = None
-        self._thread: Optional[threading.Thread] = None
+        self._servers: list[ThreadingHTTPServer] = []
+        self._threads: list[threading.Thread] = []
+        self.bound_ports: list[int] = []
         self.active = False
 
     @property
     def url(self) -> str:
         host = self.config.gateway_ip or "127.0.0.1"
-        return f"http://{host}:{self.config.portal_port}/"
+        if CAPTIVE_PORT in self.bound_ports:
+            return f"http://{host}/"
+        port = self.bound_ports[0] if self.bound_ports else self.config.portal_port
+        return f"http://{host}:{port}/"
+
+    def _result_body(self, client_session) -> str:
+        ctx = templates.render_context(self.config)
+        m = self.metrics.get_session(client_session.session_id)
+        behaviors = ["Connected to the untrusted Wi-Fi network"]
+        entered_password = False
+        if m is not None:
+            if m.viewed_login or m.portal_opened:
+                behaviors.append("Opened the network sign-in page")
+            if m.submitted_login:
+                behaviors.append("Submitted the sign-in form")
+            if m.entered_password:
+                behaviors.append("Typed a password into the sign-in page")
+                entered_password = True
+            if m.security_prompt_interaction and not m.submitted_login:
+                behaviors.append("Interacted with the security prompt")
+        return templates.result_page(
+            title=ctx["title"],
+            organization=ctx["organization"],
+            educational_message=ctx["educational_message"],
+            contact=ctx["contact"],
+            behaviors=behaviors,
+            entered_password=entered_password,
+        )
+
+    def _landing_body(self, session) -> str:
+        ctx = templates.render_context(self.config)
+        if ctx.get("require_login", True):
+            self.metrics.mark_login_viewed(session.session_id)
+            session.viewed_login = True
+            return templates.login_page(
+                ssid=ctx["ssid"],
+                title=ctx["title"],
+                organization=ctx["organization"],
+                username_label=ctx["username_label"],
+                password_label=ctx["password_label"],
+                button_label=ctx["button_label"],
+            )
+        return templates.landing_page(
+            ssid=ctx["ssid"],
+            title=ctx["title"],
+            organization=ctx["organization"],
+            training_message=ctx["training_message"],
+            contact=ctx["contact"],
+        )
 
     def start(self, bind_host: str = "0.0.0.0") -> None:
         if self.active:
@@ -70,42 +142,49 @@ class AwarenessPortal:
 
             def do_GET(self) -> None:  # noqa: N802
                 session = self._session()
-                portal.metrics.mark_portal_opened(session.session_id)
-                session.portal_opened = True
-                ctx = templates.render_context(portal.config)
-                if self.path.startswith("/result"):
-                    portal.metrics.mark_completed(session.session_id)
-                    session.completed = True
-                    body = templates.result_page(
-                        title=ctx["title"],
-                        organization=ctx["organization"],
-                        educational_message=ctx["educational_message"],
-                        contact=ctx["contact"],
-                    )
-                    self._send(200, body, session.session_id)
-                    return
-                if self.path.startswith("/health"):
+                path = self.path.split("?", 1)[0]
+                if path.startswith("/health"):
                     self._send(200, "ok", session.session_id, "text/plain; charset=utf-8")
                     return
-                body = templates.landing_page(
-                    ssid=ctx["ssid"],
-                    title=ctx["title"],
-                    organization=ctx["organization"],
-                    training_message=ctx["training_message"],
-                    contact=ctx["contact"],
-                )
-                self._send(200, body, session.session_id)
+                portal.metrics.mark_portal_opened(session.session_id)
+                session.portal_opened = True
+                if path.startswith("/result"):
+                    portal.metrics.mark_completed(session.session_id)
+                    session.completed = True
+                    self._send(200, portal._result_body(session), session.session_id)
+                    return
+                # Every other path (including OS captive-portal probes) serves the
+                # sign-in / landing page so the assistant opens on the client.
+                self._send(200, portal._landing_body(session), session.session_id)
 
             def do_POST(self) -> None:  # noqa: N802
                 session = self._session()
+                path = self.path.split("?", 1)[0]
                 length = int(self.headers.get("Content-Length", "0") or 0)
                 # Cap body size; never log raw body.
                 length = min(max(length, 0), 4096)
                 raw = self.rfile.read(length) if length else b""
                 form = parse_qs(raw.decode("utf-8", errors="replace"), keep_blank_values=True)
+
+                if path.startswith("/login"):
+                    # Read the password field ONLY to compute a boolean, then drop it.
+                    password = form.get("password", [""])[0]
+                    entered_password = bool((password or "").strip())
+                    password = None  # noqa: F841 — explicit discard
+                    form.pop("password", None)
+                    form.pop("username", None)
+                    portal.metrics.mark_login_submitted(session.session_id, entered_password)
+                    session.submitted_login = True
+                    session.entered_password = entered_password
+                    session.security_prompt_interaction = True
+                    portal.metrics.mark_completed(session.session_id)
+                    session.completed = True
+                    self._send(200, portal._result_body(session), session.session_id)
+                    return
+
+                # Legacy behavioural buttons (used when require_login is disabled).
                 action = (form.get("action", ["continue"])[0] or "continue").strip()
                 training_input = form.get("training_input", [None])[0]
-
                 expected = portal.config.portal.training_value or ""
                 if action == "training_value":
                     safe_record_interaction(
@@ -114,40 +193,57 @@ class AwarenessPortal:
                         submitted_value=training_input,
                         expected_training_value=expected,
                     )
-                    # Drop training_input reference immediately.
                     training_input = None
                 else:
-                    # Behavioral button — no credential field involved.
                     safe_record_interaction(portal.metrics, session.session_id)
                     session.security_prompt_interaction = True
 
                 portal.metrics.mark_completed(session.session_id)
                 session.completed = True
-                ctx = templates.render_context(portal.config)
-                body = templates.result_page(
-                    title=ctx["title"],
-                    organization=ctx["organization"],
-                    educational_message=ctx["educational_message"],
-                    contact=ctx["contact"],
-                )
-                self._send(200, body, session.session_id)
+                self._send(200, portal._result_body(session), session.session_id)
 
-        self._httpd = ThreadingHTTPServer((bind_host, int(self.config.portal_port)), Handler)
-        self._httpd.daemon_threads = True
-        self._thread = threading.Thread(target=self._httpd.serve_forever, name="figo-awareness-portal", daemon=True)
-        self._thread.start()
+        ports: list[int] = [CAPTIVE_PORT]
+        try:
+            cfg_port = int(self.config.portal_port)
+        except (TypeError, ValueError):
+            cfg_port = 8080
+        if cfg_port != CAPTIVE_PORT:
+            ports.append(cfg_port)
+
+        bound: list[int] = []
+        for port in ports:
+            try:
+                httpd = ThreadingHTTPServer((bind_host, port), Handler)
+            except OSError:
+                # e.g. port 80 already taken; keep trying the remaining ports.
+                continue
+            httpd.daemon_threads = True
+            thread = threading.Thread(
+                target=httpd.serve_forever,
+                name=f"figo-awareness-portal-{port}",
+                daemon=True,
+            )
+            thread.start()
+            self._servers.append(httpd)
+            self._threads.append(thread)
+            bound.append(port)
+
+        if not bound:
+            raise OSError(f"Could not bind portal on {bind_host} (tried {ports}).")
+        self.bound_ports = bound
         self.active = True
 
     def stop(self) -> None:
-        if self._httpd is not None:
+        for httpd in self._servers:
             try:
-                self._httpd.shutdown()
+                httpd.shutdown()
             except Exception:
                 pass
             try:
-                self._httpd.server_close()
+                httpd.server_close()
             except Exception:
                 pass
-        self._httpd = None
-        self._thread = None
+        self._servers = []
+        self._threads = []
+        self.bound_ports = []
         self.active = False

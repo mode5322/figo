@@ -20,6 +20,11 @@ class SessionMetrics:
     timestamp: str = field(default_factory=utc_now_iso)
     connected: bool = True
     portal_opened: bool = False
+    viewed_login: bool = False
+    submitted_login: bool = False
+    # True if the participant typed something into the (fake) password field.
+    # The value itself is NEVER stored — only this boolean outcome.
+    entered_password: bool = False
     security_prompt_interaction: bool = False
     training_action: bool = False
     completed: bool = False
@@ -63,6 +68,8 @@ class MetricsStore:
         self.connected_devices: int = 0
         self.portal_visits: int = 0
         self.interactions: int = 0
+        self.login_submissions: int = 0
+        self.passwords_entered: int = 0
         self.completed: int = 0
         self.started_at: float = time.time()
         self._events: list[dict[str, str]] = []
@@ -91,6 +98,10 @@ class MetricsStore:
                 self._by_session[session_id] = SessionMetrics(session_id=session_id)
             return self._by_session[session_id]
 
+    def get_session(self, session_id: str) -> Optional[SessionMetrics]:
+        with self._lock:
+            return self._by_session.get(session_id)
+
     def mark_portal_opened(self, session_id: str) -> SessionMetrics:
         with self._lock:
             m = self.ensure(session_id)
@@ -98,6 +109,45 @@ class MetricsStore:
                 m.portal_opened = True
                 self.portal_visits += 1
                 self.add_event("portal", f"Portal opened · session {session_id[:8]}")
+            return m
+
+    def mark_login_viewed(self, session_id: str) -> SessionMetrics:
+        with self._lock:
+            m = self.ensure(session_id)
+            if not m.viewed_login:
+                m.viewed_login = True
+                self.add_event("login", f"Viewed sign-in page · session {session_id[:8]}")
+            return m
+
+    def mark_login_submitted(self, session_id: str, entered_password: bool) -> SessionMetrics:
+        """
+        Record that the participant submitted the sign-in form.
+
+        `entered_password` is a boolean only: whether the (fake) password field
+        was non-empty. The submitted value is never received here and is never
+        stored anywhere.
+        """
+        with self._lock:
+            m = self.ensure(session_id)
+            first = not m.submitted_login
+            m.submitted_login = True
+            if not m.security_prompt_interaction:
+                m.security_prompt_interaction = True
+                self.interactions += 1
+            if first:
+                self.login_submissions += 1
+            if entered_password and not m.entered_password:
+                m.entered_password = True
+                self.passwords_entered += 1
+                self.add_event(
+                    "risk",
+                    f"ENTERED a password on the fake portal (NOT stored) · {session_id[:8]}",
+                )
+            elif first:
+                self.add_event(
+                    "login",
+                    f"Submitted sign-in without a password · {session_id[:8]}",
+                )
             return m
 
     def mark_interaction(self, session_id: str) -> SessionMetrics:
@@ -148,6 +198,8 @@ class MetricsStore:
                 "connected_devices": self.connected_devices,
                 "portal_visits": self.portal_visits,
                 "interactions": self.interactions,
+                "login_submissions": self.login_submissions,
+                "passwords_entered": self.passwords_entered,
                 "completed": self.completed,
                 "runtime_sec": int(time.time() - self.started_at),
                 "sessions": [m.to_dict() for m in self._by_session.values()],
@@ -167,6 +219,8 @@ class MetricsStore:
             self.connected_devices = 0
             self.portal_visits = 0
             self.interactions = 0
+            self.login_submissions = 0
+            self.passwords_entered = 0
             self.completed = 0
             self.started_at = time.time()
             self._events.clear()

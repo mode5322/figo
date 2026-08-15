@@ -11,28 +11,41 @@ if TYPE_CHECKING:
 
 def build_hostapd_conf(config: "LabConfig", conf_path: Path) -> Path:
     """
-    Build an open lab AP config (no WPA passphrase).
+    Build the lab AP config.
 
-    The lab intentionally uses an open AP so participants are not asked for
-    real Wi-Fi passwords at association time. Awareness happens in the portal.
+    Two link-layer modes are supported:
+
+    * ``open`` (default) — no passphrase. Simplest to join, but clients show an
+      "insecure / open network" warning.
+    * ``wpa2`` — WPA2-PSK using a lab passphrase the administrator sets and
+      shares with authorized participants. This makes the network appear
+      "secured" (padlock) and more credible for the awareness assessment. The
+      passphrase is the lab AP's OWN key — it is never a harvested credential.
     """
     iface = config.ap_interface or config.interface
     ssid = config.effective_ssid()
     channel = str(config.channel).strip()
-    body = "\n".join(
-        [
-            f"interface={iface}",
-            "driver=nl80211",
-            f"ssid={ssid}",
-            "hw_mode=g" if _is_24ghz(channel) else "hw_mode=a",
-            f"channel={channel}",
-            "auth_algs=1",
-            "ignore_broadcast_ssid=0",
-            "wpa=0",
-            "",
+    lines = [
+        f"interface={iface}",
+        "driver=nl80211",
+        f"ssid={ssid}",
+        "hw_mode=g" if _is_24ghz(channel) else "hw_mode=a",
+        f"channel={channel}",
+        "auth_algs=1",
+        "ignore_broadcast_ssid=0",
+    ]
+    if getattr(config, "is_secured", None) and config.is_secured() and config.ap_passphrase:
+        lines += [
+            "wpa=2",
+            f"wpa_passphrase={config.ap_passphrase}",
+            "wpa_key_mgmt=WPA-PSK",
+            "wpa_pairwise=CCMP",
+            "rsn_pairwise=CCMP",
         ]
-    )
-    conf_path.write_text(body, encoding="utf-8")
+    else:
+        lines.append("wpa=0")
+    lines.append("")
+    conf_path.write_text("\n".join(lines), encoding="utf-8")
     return conf_path
 
 

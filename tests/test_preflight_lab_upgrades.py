@@ -5,9 +5,17 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import patch
 
+from modules.figolab.ap import build_hostapd_conf
+from modules.figolab.awareness import templates
 from modules.figolab.awareness.metrics import MetricsStore
+from modules.figolab.awareness.portal import CAPTIVE_PORT
 from modules.figolab.lab_session import dry_run_lab_configs
-from modules.figolab.models import LabConfig, normalize_lab_network, validate_portal_port
+from modules.figolab.models import (
+    LabConfig,
+    normalize_lab_network,
+    validate_ap_passphrase,
+    validate_portal_port,
+)
 from modules.preflight import AdapterCapabilities, format_preflight_report, probe_adapter_capabilities, run_preflight
 from modules.tools import packages_for
 
@@ -50,7 +58,9 @@ def test_metrics_event_log_and_client_delta():
     assert "client" in kinds
     snap = store.snapshot()
     assert "events" in snap
-    assert "password" not in str(snap).lower()
+    # Counters exist, but no submitted secret value is ever retained.
+    assert "login_submissions" in snap
+    assert "passwords_entered" in snap
 
 
 def test_dry_run_lab_configs(tmp_path: Path):
@@ -105,3 +115,86 @@ def test_run_preflight_missing_tools():
     assert report.ok is False
     text = format_preflight_report(report)
     assert "hostapd" in text
+
+
+def test_hostapd_open_vs_wpa2(tmp_path: Path):
+    base = dict(
+        target_ssid="Office",
+        ap_ssid="Office-Lab",
+        channel="6",
+        interface="wlan0",
+        ap_interface="wlan0",
+    )
+    open_cfg = LabConfig(ap_security="open", **base)
+    open_path = tmp_path / "open.conf"
+    build_hostapd_conf(open_cfg, open_path)
+    open_text = open_path.read_text()
+    assert "wpa=0" in open_text
+    assert "wpa_passphrase" not in open_text
+
+    secure_cfg = LabConfig(ap_security="wpa2", ap_passphrase="LabPass1234", **base)
+    secure_path = tmp_path / "secure.conf"
+    build_hostapd_conf(secure_cfg, secure_path)
+    secure_text = secure_path.read_text()
+    assert "wpa=2" in secure_text
+    assert "wpa_passphrase=LabPass1234" in secure_text
+    assert "wpa_key_mgmt=WPA-PSK" in secure_text
+
+
+def test_ap_passphrase_and_network_security_normalization():
+    assert validate_ap_passphrase("short")[0] is False
+    assert validate_ap_passphrase("LongEnough123")[0] is True
+    secured = normalize_lab_network({"preset": "default", "ap_security": "wpa2", "ap_passphrase": "LabPass1234"})
+    assert secured["ap_security"] == "wpa2"
+    assert secured["ap_passphrase"] == "LabPass1234"
+    # Switching back to open clears the stored passphrase.
+    opened = normalize_lab_network({"preset": "default", "ap_security": "open", "ap_passphrase": "LabPass1234"})
+    assert opened["ap_security"] == "open"
+    assert opened["ap_passphrase"] == ""
+    # wpa2 config fails validation without a passphrase.
+    cfg = LabConfig(ap_ssid="Lab", channel="6", interface="wlan0", ap_security="wpa2", ap_passphrase="")
+    assert cfg.validate()[0] is False
+
+
+def test_login_page_has_password_field_and_posts_to_login():
+    html = templates.login_page(
+        ssid="CorpWiFi",
+        title="Network sign-in",
+        organization="Acme",
+    )
+    assert 'action="/login"' in html
+    assert 'type="password"' in html
+    assert "CorpWiFi" in html
+
+
+def test_login_submission_records_behavior_not_password():
+    store = MetricsStore()
+    sid = "sessionabcdef"
+    # entered_password True must bump the counter and set the flag, but the
+    # actual value is never passed to the metrics store at all.
+    store.mark_login_submitted(sid, entered_password=True)
+    snap = store.snapshot()
+    assert snap["login_submissions"] == 1
+    assert snap["passwords_entered"] == 1
+    session = store.get_session(sid)
+    assert session.entered_password is True
+    assert session.submitted_login is True
+    kinds = [e["kind"] for e in store.recent_events(10)]
+    assert "risk" in kinds
+
+
+def test_result_page_lists_behaviors_and_warns_on_password():
+    html = templates.result_page(
+        title="Awareness",
+        organization="Acme",
+        educational_message="Never enter your password.",
+        contact="soc@acme",
+        behaviors=["Connected to the untrusted Wi-Fi network", "Typed a password into the sign-in page"],
+        entered_password=True,
+    )
+    assert "Typed a password into the sign-in page" in html
+    assert "NOT stored" in html
+
+
+def test_captive_port_constant():
+    assert CAPTIVE_PORT == 80

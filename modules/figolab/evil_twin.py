@@ -31,6 +31,7 @@ from modules.figolab.models import (
     PortalConfig,
     channel_band,
     normalize_lab_network,
+    validate_ap_passphrase,
     validate_lab_network,
     validate_portal_port,
     validate_subnet_prefix,
@@ -132,6 +133,26 @@ def _configure_portal(settings: Any, api: Any) -> None:
         default=portal.training_value,
     )
     logo = api.ask("Logo path (optional)", default=portal.logo_path) or portal.logo_path
+    require_login = api.confirm(
+        "Show a sign-in page with a password field? (value is never stored)",
+        default=portal.require_login,
+    )
+    username_label = portal.login_username_label
+    password_label = portal.login_password_label
+    button_label = portal.login_button_label
+    if require_login:
+        username_label = (
+            api.ask("Sign-in username label", default=portal.login_username_label)
+            or portal.login_username_label
+        )
+        password_label = (
+            api.ask("Sign-in password label", default=portal.login_password_label)
+            or portal.login_password_label
+        )
+        button_label = (
+            api.ask("Sign-in button label", default=portal.login_button_label)
+            or portal.login_button_label
+        )
 
     settings.portal = PortalConfig(
         enabled=enabled,
@@ -143,6 +164,10 @@ def _configure_portal(settings: Any, api: Any) -> None:
         training_value=(training_value or "").strip(),
         logo_path=logo.strip(),
         session_ttl_sec=portal.session_ttl_sec,
+        require_login=require_login,
+        login_username_label=username_label.strip(),
+        login_password_label=password_label.strip(),
+        login_button_label=button_label.strip(),
     )
     try:
         api.save_settings(settings)
@@ -218,18 +243,40 @@ def _prompt_custom_lab_network(api: Any, current: dict[str, str]) -> Optional[di
     )
 
 
+def _prompt_ap_security(api: Any, current: dict[str, str]) -> Optional[dict[str, str]]:
+    """Ask whether the lab AP should be WPA2-secured (padlock) or open."""
+    cur_secured = str(current.get("ap_security", "open")).lower() == "wpa2"
+    secured = api.confirm(
+        "Secure the lab AP with WPA2 (shows a padlock, hides 'insecure network')?",
+        default=cur_secured,
+    )
+    if not secured:
+        return {"ap_security": "open", "ap_passphrase": ""}
+    passphrase = api.ask(
+        "Lab WPA2 passphrase (8–63 chars, shared with participants)",
+        default=current.get("ap_passphrase", ""),
+    )
+    ok, err = validate_ap_passphrase(passphrase or "")
+    if not ok:
+        api.warn_and_back("Invalid WPA2 passphrase", err)
+        return None
+    return {"ap_security": "wpa2", "ap_passphrase": passphrase}
+
+
 def _configure_lab_network(settings: Any, api: Any) -> None:
-    """Menu 8 → 4: choose default / home-style / custom gateway+DHCP+port+SSID."""
+    """Menu 8 → 4: choose default / home-style / custom gateway+DHCP+port+SSID + security."""
     api.clear_screen()
     current = _lab_network_from_settings(settings)
+    cur_sec = "WPA2" if str(current.get("ap_security", "open")).lower() == "wpa2" else "open"
     console.print(
         Panel(
             f"Current gateway : {current['gateway_ip']}/{current.get('subnet_prefix', '24')}\n"
             f"DHCP range      : {current['dhcp_range_start']} – {current['dhcp_range_end']}\n"
             f"Portal port     : {current.get('portal_port', '8080')}\n"
             f"Lab AP SSID     : {current.get('ap_ssid') or '(same as target)'}\n"
+            f"AP security     : {cur_sec}\n"
             f"Preset          : {current.get('preset', 'default')}",
-            title="Lab network (gateway / DHCP / port / SSID)",
+            title="Lab network (gateway / DHCP / port / SSID / security)",
             border_style="cyan",
         )
     )
@@ -239,6 +286,7 @@ def _configure_lab_network(settings: Any, api: Any) -> None:
     table.add_row("1", "Default lab network  ·  10.66.66.1  (DHCP 10.66.66.10–100)")
     table.add_row("2", "Home-style network   ·  192.168.1.1  (DHCP 192.168.1.10–100)")
     table.add_row("3", "Customize gateway, DHCP, prefix, portal port, lab SSID")
+    table.add_row("4", "AP security only (WPA2 padlock / open)")
     table.add_row("0", "Back / keep current")
     console.print(Panel(table, title="Choose addressing", border_style="green", box=box.ROUNDED))
     if current.get("preset") == "home":
@@ -258,9 +306,16 @@ def _configure_lab_network(settings: Any, api: Any) -> None:
         network = _prompt_custom_lab_network(api, current)
         if network is None:
             return
+    elif choice == "4":
+        network = dict(current)
     else:
-        api.warn_and_back("Unknown option", "Enter 0–3.")
+        api.warn_and_back("Unknown option", "Enter 0–4.")
         return
+
+    security = _prompt_ap_security(api, current)
+    if security is None:
+        return
+    network.update(security)
 
     if not _save_lab_network(settings, api, network):
         return
@@ -415,23 +470,31 @@ def _build_lab_config(settings: Any, row: dict[str, str], mode: str) -> LabConfi
         dhcp_range_end=network["dhcp_range_end"],
         subnet_prefix=int(network.get("subnet_prefix") or 24),
         portal_port=int(network.get("portal_port") or 8080),
+        ap_security=str(network.get("ap_security") or "open"),
+        ap_passphrase=str(network.get("ap_passphrase") or ""),
     )
 
 
 def _confirm_start(config: LabConfig, api: Any) -> bool:
+    ap_sec = "WPA2 (secured / padlock)" if config.is_secured() else "open (clients warn: insecure)"
+    login = (
+        "Sign-in page shown (password NEVER stored)"
+        if config.portal_enabled and config.portal.require_login
+        else ("Awareness prompt only" if config.portal_enabled else "Disabled")
+    )
     body = (
         f"Target SSID : {config.target_ssid}\n"
         f"Lab AP SSID : {config.effective_ssid()}\n"
         f"Channel     : {config.channel}\n"
-        f"Security    : {config.security}\n"
+        f"AP security : {ap_sec}\n"
         f"Interface   : {config.interface}\n"
         f"Gateway IP  : {config.gateway_ip}/{config.subnet_prefix}\n"
         f"DHCP range  : {config.dhcp_range_start} – {config.dhcp_range_end}\n"
-        f"Portal port : {config.portal_port}\n"
-        f"Portal      : {'Enabled' if config.portal_enabled else 'Disabled'}\n"
+        f"Portal      : {'Enabled' if config.portal_enabled else 'Disabled'} · captive :80 + :{config.portal_port}\n"
+        f"Sign-in     : {login}\n"
         f"{'─' * 38}\n"
         "This is an authorized security lab.\n"
-        "No real passwords will be collected."
+        "No real passwords will be collected or stored."
     )
     console.print(Panel(body, title="EVIL TWIN LAB", border_style="yellow", box=box.ROUNDED))
     return api.confirm("Start assessment?", default=False)
@@ -468,14 +531,15 @@ def _run_lab_flow(settings: Any, api: Any, *, mode: str) -> None:
         Panel(
             f"Gateway IP : {network['gateway_ip']}/{network.get('subnet_prefix', '24')}\n"
             f"DHCP range : {network['dhcp_range_start']} – {network['dhcp_range_end']}\n"
-            f"Portal port: {network.get('portal_port', '8080')}\n"
+            f"Portal port: {network.get('portal_port', '8080')} (+ captive :80)\n"
             f"Lab SSID   : {network.get('ap_ssid') or '(same as target)'}\n"
+            f"AP security: {'WPA2 (padlock)' if str(network.get('ap_security', 'open')).lower() == 'wpa2' else 'open (insecure)'}\n"
             f"Preset     : {network.get('preset', 'default')}",
             title="Lab network",
             border_style="cyan",
         )
     )
-    if not api.confirm("Use this lab network (gateway / DHCP / port / SSID)?", default=True):
+    if not api.confirm("Use this lab network (gateway / DHCP / port / SSID / security)?", default=True):
         _configure_lab_network(settings, api)
 
     config = _build_lab_config(settings, row, mode)
@@ -512,7 +576,8 @@ def _run_lab_flow(settings: Any, api: Any, *, mode: str) -> None:
                 f"Organization : {config.portal.organization or '-'}\n"
                 f"Portal title : {config.portal.portal_title}\n"
                 f"Contact      : {config.portal.security_contact or '-'}\n"
-                f"Portal port  : {config.portal_port}",
+                f"Sign-in page : {'Yes (password never stored)' if config.portal.require_login else 'No (prompt only)'}\n"
+                f"Portal port  : {config.portal_port} (+ captive :80)",
                 title="Awareness portal configuration",
                 border_style="cyan",
             )
@@ -554,21 +619,28 @@ def _dashboard_renderable(session) -> Panel:
     snap = session.metrics.snapshot()
     ap = "Active" if session.ap_active and session.tracker.alive("hostapd") else "Down"
     portal = "Active" if session.portal_active else ("Disabled" if session.config.lab_mode == "wifi" else "Down")
+    security = "WPA2 (secured)" if session.config.is_secured() else "open (insecure)"
+    portal_ports = ":80 + :{}".format(session.config.portal_port)
+    if session.portal and session.portal.bound_ports:
+        portal_ports = " + ".join(f":{p}" for p in session.portal.bound_ports)
     body = (
         f"SSID: {session.config.effective_ssid()}\n"
         f"Channel: {session.config.channel}  ·  Band: {channel_band(session.config.channel)}\n"
+        f"Security: {security}\n"
         f"Gateway: {session.config.gateway_ip}/{session.config.subnet_prefix}\n"
         f"DHCP: {session.config.dhcp_range_start} – {session.config.dhcp_range_end}\n"
         f"AP: {ap}\n"
-        f"Portal: {portal}  ·  :{session.config.portal_port}\n"
+        f"Portal: {portal}  ·  {portal_ports}\n"
         f"Runtime: {session.runtime_sec()}s\n"
         f"{'─' * 42}\n"
-        f"Connected devices : {snap['connected_devices']}\n"
-        f"Portal visits     : {snap['portal_visits']}\n"
-        f"Interactions      : {snap['interactions']}\n"
-        f"Completed         : {snap['completed']}\n"
+        f"Connected devices  : {snap['connected_devices']}\n"
+        f"Portal visits      : {snap['portal_visits']}\n"
+        f"Sign-in submissions: {snap['login_submissions']}\n"
+        f"[red]Passwords entered  : {snap['passwords_entered']}[/red]\n"
+        f"Interactions       : {snap['interactions']}\n"
+        f"Completed          : {snap['completed']}\n"
         f"{'─' * 42}\n"
-        f"[dim]Live events[/dim]\n"
+        f"[dim]Live behaviour events[/dim]\n"
         f"{_format_events(session.metrics.recent_events(6))}"
     )
     return Panel(
