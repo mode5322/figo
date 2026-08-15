@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import re
 import subprocess
+import tempfile
+import time
 from pathlib import Path
 from typing import Optional
 
-from modules.constants import DEAUTH_COUNT
+from modules.constants import DEAUTH_COUNT, STATION_SCAN_SEC
 from modules.network import wireless_interfaces
 from modules.tools import run_cmd, which_or_none
 
@@ -85,6 +87,105 @@ def stop_monitor(mon: Optional[str], _base_iface: str) -> None:
     systemctl = which_or_none("systemctl")
     if systemctl:
         run_cmd([systemctl, "restart", "NetworkManager"], timeout=40)
+
+
+def parse_airodump_stations(csv_text: str, bssid: str) -> list[dict[str, str]]:
+    """Parse airodump-ng CSV and return stations associated with *bssid*."""
+    target = bssid.strip().upper()
+    if not target:
+        return []
+
+    lines = csv_text.splitlines()
+    station_start: Optional[int] = None
+    for idx, line in enumerate(lines):
+        head = line.strip().lower()
+        if head.startswith("station mac"):
+            station_start = idx + 1
+            break
+    if station_start is None:
+        return []
+
+    stations: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for line in lines[station_start:]:
+        raw = line.strip()
+        if not raw:
+            continue
+        parts = [p.strip() for p in raw.split(",")]
+        if len(parts) < 6:
+            continue
+        mac = parts[0].upper()
+        if mac.count(":") != 5:
+            continue
+        assoc = parts[5].upper()
+        if assoc != target:
+            continue
+        if mac in seen:
+            continue
+        seen.add(mac)
+        stations.append(
+            {
+                "mac": mac,
+                "power": parts[3] if len(parts) > 3 else "",
+                "packets": parts[4] if len(parts) > 4 else "",
+                "probes": parts[6] if len(parts) > 6 else "",
+            }
+        )
+    stations.sort(key=lambda row: int(row["packets"]) if str(row["packets"]).lstrip("-").isdigit() else -1, reverse=True)
+    return stations
+
+
+def scan_associated_stations(
+    mon: str,
+    bssid: str,
+    channel: str,
+    duration: int = STATION_SCAN_SEC,
+) -> list[dict[str, str]]:
+    """Brief airodump CSV pass to list clients currently associated with the AP."""
+    airodump = which_or_none("airodump-ng")
+    if not airodump or not bssid:
+        return []
+
+    with tempfile.TemporaryDirectory(prefix="figo-sta-") as tmp:
+        prefix = Path(tmp) / "scan"
+        log_path = Path(tmp) / "scan.log"
+        log_fh = log_path.open("w", encoding="utf-8")
+        cmd = [
+            airodump,
+            "--bssid",
+            bssid,
+            "-c",
+            channel,
+            "-w",
+            str(prefix),
+            "--output-format",
+            "csv",
+            mon,
+        ]
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=log_fh,
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL,
+            )
+        except OSError:
+            log_fh.close()
+            return []
+        proc._figo_log = log_fh  # type: ignore[attr-defined]
+        try:
+            time.sleep(max(2, int(duration)))
+        finally:
+            stop_airodump(proc)
+
+        csv_files = sorted(Path(tmp).glob("*.csv"))
+        if not csv_files:
+            return []
+        try:
+            text = csv_files[-1].read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return []
+        return parse_airodump_stations(text, bssid)
 
 
 def start_airodump(

@@ -15,6 +15,7 @@ DEAUTH_COUNT = 5
 DEAUTH_BURSTS = 8
 DEAUTH_GAP_SEC = 8
 AIRODUMP_WARMUP_SEC = 4
+STATION_SCAN_SEC = 6
 TOOL_PACKAGES = {
     "airmon-ng": "aircrack-ng",
     "airodump-ng": "aircrack-ng",

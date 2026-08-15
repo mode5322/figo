@@ -10,9 +10,11 @@ from pathlib import Path
 from typing import Optional
 
 from rich import box
+from rich.console import Group
 from rich.live import Live
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
 from modules.config import Settings
 from modules.constants import (
@@ -22,11 +24,13 @@ from modules.constants import (
     DEAUTH_GAP_SEC,
     DEFAULT_HANDSHAKE_DIR,
     REQUIRED_BINS,
+    STATION_SCAN_SEC,
 )
 from modules.monitor import (
     enable_monitor,
     run_deauth,
     safe_filename,
+    scan_associated_stations,
     start_airodump,
     stop_airodump,
     stop_monitor,
@@ -51,6 +55,64 @@ def cap_size_label(capfile: Optional[Path]) -> str:
         return format_bytes(capfile.stat().st_size)
     except OSError:
         return "?"
+
+
+def render_connected_devices(stations: list[dict[str, str]]) -> Table:
+    table = Table(
+        box=box.SIMPLE,
+        expand=True,
+        show_header=True,
+        header_style="bold",
+        padding=(0, 1),
+    )
+    table.add_column("#", style="dim", width=3, justify="right")
+    table.add_column("MAC", style="cyan", no_wrap=True)
+    table.add_column("Power", justify="right", width=7)
+    table.add_column("Packets", justify="right", width=8)
+    table.add_column("Probes", overflow="ellipsis")
+    if not stations:
+        table.add_row("-", "[dim]none seen[/dim]", "", "", "")
+        return table
+    for idx, sta in enumerate(stations, start=1):
+        table.add_row(
+            str(idx),
+            sta.get("mac") or "?",
+            sta.get("power") or "-",
+            sta.get("packets") or "-",
+            (sta.get("probes") or "").strip() or "-",
+        )
+    return table
+
+
+def render_capture_summary(
+    settings: Settings,
+    handshake_dir: Path,
+    stations: list[dict[str, str]],
+) -> Panel:
+    summary = Table(box=box.ROUNDED, expand=True, show_header=False)
+    summary.add_column("k", style="bold", width=16)
+    summary.add_column("v")
+    summary.add_row("Adapter", settings.interface)
+    summary.add_row("Target", f"{settings.target.ssid}  ({settings.target.bssid})")
+    summary.add_row("Channel", settings.target.channel)
+    sec = settings.target.security or "-"
+    summary.add_row("Security", f"[yellow]{sec}[/yellow]" if is_wpa3(sec) else sec)
+    summary.add_row("Handshake dir", str(handshake_dir))
+    count = len(stations)
+    summary.add_row(
+        "Connected",
+        f"[bold]{count}[/bold] device{'s' if count != 1 else ''}  "
+        f"[dim](scanned {STATION_SCAN_SEC}s)[/dim]",
+    )
+
+    devices = render_connected_devices(stations)
+    body = Group(
+        summary,
+        Text(""),
+        Text("Connected devices", style="bold"),
+        devices,
+    )
+    return Panel(body, title="Capture handshake", border_style="yellow", box=box.ROUNDED)
 
 
 def render_capture_progress(
@@ -138,25 +200,7 @@ def action_capture(settings: Settings) -> None:
 
     clear_screen()
     render_banner(settings)
-    summary = Table(box=box.ROUNDED, expand=True, show_header=False)
-    summary.add_column("k", style="bold", width=16)
-    summary.add_column("v")
-    summary.add_row("Adapter", settings.interface)
-    summary.add_row("Target", f"{settings.target.ssid}  ({settings.target.bssid})")
-    summary.add_row("Channel", settings.target.channel)
-    sec = settings.target.security or "-"
-    summary.add_row("Security", f"[yellow]{sec}[/yellow]" if is_wpa3(sec) else sec)
-    summary.add_row("Handshake dir", str(handshake_dir))
-    console.print(Panel(summary, title="Capture handshake", border_style="yellow"))
-    console.print(
-        "[yellow]Deauthentication will briefly disconnect clients on this access point "
-        "so a WPA handshake can be captured.[/yellow]\n"
-    )
-    if not confirm("Continue?", default=False):
-        return
 
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    prefix = handshake_dir / f"{safe_filename(settings.target.ssid)}_{stamp}"
     bssid = settings.target.bssid
     channel = settings.target.channel
     base_iface = settings.interface
@@ -167,7 +211,7 @@ def action_capture(settings: Settings) -> None:
     restored = False
 
     try:
-        console.print("\n[dim]Checking adapter: monitor mode...[/dim]")
+        console.print("[dim]Enabling monitor mode to list connected devices...[/dim]")
         mon, mon_out = enable_monitor(base_iface, channel)
         if not mon:
             console.print("[dim]Restoring adapter / NetworkManager...[/dim]")
@@ -181,6 +225,24 @@ def action_capture(settings: Settings) -> None:
             )
             return
         console.print(f"[green]Monitor interface:[/green] [bold]{mon}[/bold]")
+        console.print(
+            f"[dim]Scanning for clients on {settings.target.ssid} "
+            f"({STATION_SCAN_SEC}s)...[/dim]"
+        )
+        stations = scan_associated_stations(mon, bssid, channel, STATION_SCAN_SEC)
+
+        clear_screen()
+        render_banner(settings)
+        console.print(render_capture_summary(settings, handshake_dir, stations))
+        console.print(
+            "[yellow]Deauthentication will briefly disconnect clients on this access point "
+            "so a WPA handshake can be captured.[/yellow]\n"
+        )
+        if not confirm("Continue?", default=False):
+            console.print("[dim]Restoring adapter / NetworkManager...[/dim]")
+            stop_monitor(mon, base_iface)
+            restored = True
+            return
 
         console.print("[dim]Checking adapter: packet injection...[/dim]")
         inject_ok, inject_out = test_injection(mon)
@@ -198,6 +260,9 @@ def action_capture(settings: Settings) -> None:
             return
 
         console.print("[green]Injection test passed.[/green]")
+
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        prefix = handshake_dir / f"{safe_filename(settings.target.ssid)}_{stamp}"
 
         dump_proc, dump_err = start_airodump(mon, bssid, channel, prefix)
         if dump_err or dump_proc is None:
@@ -340,4 +405,3 @@ def action_capture(settings: Settings) -> None:
         if not restored:
             console.print("[dim]Restoring adapter / NetworkManager...[/dim]")
             stop_monitor(mon, base_iface)
-

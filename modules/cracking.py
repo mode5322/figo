@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -18,6 +19,206 @@ from modules.constants import DEFAULT_HANDSHAKE_DIR
 from modules.exceptions import BackToMenu
 from modules.tools import require_bins, require_wordlist, run_cmd, which_or_none
 from modules.ui import ask, clear_screen, confirm, console, pause, render_banner, warn_and_back
+
+HASHCAT_GPU_ERROR_HINTS = (
+    "no opencl",
+    "no devices found",
+    "no devices found/left",
+    "cl_platform_not_found",
+    "clgetplatformids",
+    "cuinit",
+    "cuda sdk",
+    "hip runtime",
+    "failed to initialize",
+    "self-test failed",
+    "permission denied",
+    "not a valid opencl",
+    "backend initialization",
+)
+
+
+@dataclass
+class GpuInfo:
+    pci_devices: list[str] = field(default_factory=list)
+    nvidia_smi: list[str] = field(default_factory=list)
+    hashcat_devices: list[dict[str, str]] = field(default_factory=list)
+    backend_ok: bool = False
+    backend_summary: str = ""
+    backend_error: str = ""
+    raw_hashcat_i: str = ""
+
+
+def _pci_gpu_lines() -> list[str]:
+    lspci = which_or_none("lspci")
+    if not lspci:
+        return []
+    _code, out = run_cmd([lspci], timeout=10)
+    rows: list[str] = []
+    for line in out.splitlines():
+        low = line.lower()
+        if "vga compatible controller" in low or "3d controller" in low or "display controller" in low:
+            # Drop leading bus id prefix noise for display: keep full line.
+            rows.append(line.strip())
+    return rows
+
+
+def _nvidia_smi_lines() -> list[str]:
+    smi = which_or_none("nvidia-smi")
+    if not smi:
+        return []
+    code, out = run_cmd(
+        [smi, "--query-gpu=index,name,driver_version,memory.total", "--format=csv,noheader"],
+        timeout=12,
+    )
+    if code == 0 and out.strip():
+        return [ln.strip() for ln in out.splitlines() if ln.strip()]
+    code, out = run_cmd([smi, "-L"], timeout=12)
+    if code == 0 and out.strip():
+        return [ln.strip() for ln in out.splitlines() if ln.strip()]
+    return []
+
+
+def parse_hashcat_backend(text: str) -> tuple[bool, list[dict[str, str]], str]:
+    """Return (ok, devices, error_or_summary) from `hashcat -I` output."""
+    low = (text or "").lower()
+    devices: list[dict[str, str]] = []
+    current: dict[str, str] = {}
+
+    def flush() -> None:
+        nonlocal current
+        if current.get("name") or current.get("type"):
+            devices.append(current)
+        current = {}
+
+    for line in (text or "").splitlines():
+        stripped = line.strip()
+        if re.match(r"(?:Backend|OpenCL|HIP|CUDA)\s+Device\s+ID\s+#?\d+", stripped, re.I):
+            flush()
+            continue
+        for key, pattern in (
+            ("type", r"^Type\.+:\s*(.+)$"),
+            ("vendor", r"^Vendor\.+:\s*(.+)$"),
+            ("name", r"^Name\.+:\s*(.+)$"),
+            ("memory", r"^Memory\.Total\.+:\s*(.+)$"),
+        ):
+            match = re.match(pattern, stripped, re.I)
+            if match:
+                current[key] = match.group(1).strip()
+                break
+    flush()
+
+    # Prefer GPU-type devices; keep others if no GPU listed.
+    gpu_only = [d for d in devices if "gpu" in (d.get("type") or "").lower()]
+    chosen = gpu_only or devices
+
+    error = ""
+    if "no opencl, hip or cuda compatible platform found" in low:
+        error = "No OpenCL / HIP / CUDA compatible platform found."
+    elif "cl_platform_not_found" in low or "clgetplatformids()" in low:
+        error = "OpenCL platforms not found (runtime/driver missing)."
+    elif "no devices found" in low:
+        error = "hashcat found no usable devices."
+    elif "permission denied" in low and "hashcat" in low:
+        error = "hashcat could not write its session directory (permission denied)."
+
+    ok = bool(chosen) and not error
+    if ok:
+        summary = f"{len(chosen)} backend device(s) ready"
+    elif error:
+        summary = error
+    elif text.strip():
+        summary = "hashcat backend probe returned no usable GPU devices."
+    else:
+        summary = "hashcat backend probe produced no output."
+    return ok, chosen, summary
+
+
+def collect_gpu_info() -> GpuInfo:
+    info = GpuInfo(pci_devices=_pci_gpu_lines(), nvidia_smi=_nvidia_smi_lines())
+    hashcat = which_or_none("hashcat")
+    if not hashcat:
+        info.backend_summary = "hashcat is not installed."
+        info.backend_error = info.backend_summary
+        return info
+    _code, out = run_cmd([hashcat, "-I"], timeout=25)
+    info.raw_hashcat_i = out
+    ok, devices, summary = parse_hashcat_backend(out)
+    info.backend_ok = ok
+    info.hashcat_devices = devices
+    info.backend_summary = summary
+    if not ok:
+        info.backend_error = summary
+    return info
+
+
+def format_gpu_info_block(info: GpuInfo) -> str:
+    lines: list[str] = ["[bold]Graphics card / GPU[/bold]"]
+    if info.pci_devices:
+        lines.append("[dim]PCI[/dim]")
+        for row in info.pci_devices:
+            lines.append(f"  • {row}")
+    else:
+        lines.append("[dim]PCI[/dim]  (none detected via lspci)")
+
+    if info.nvidia_smi:
+        lines.append("[dim]nvidia-smi[/dim]")
+        for row in info.nvidia_smi:
+            lines.append(f"  • {row}")
+    elif any("nvidia" in r.lower() for r in info.pci_devices):
+        lines.append(
+            "[dim]nvidia-smi[/dim]  not available — NVIDIA card seen on PCI, "
+            "but driver tools are missing"
+        )
+
+    if info.hashcat_devices:
+        lines.append("[dim]hashcat backends[/dim]")
+        for idx, dev in enumerate(info.hashcat_devices, 1):
+            name = dev.get("name") or "?"
+            vendor = dev.get("vendor") or ""
+            dtype = dev.get("type") or "?"
+            memory = dev.get("memory") or ""
+            detail = f"{dtype}: {name}"
+            if vendor:
+                detail += f" ({vendor})"
+            if memory:
+                detail += f" · {memory}"
+            lines.append(f"  {idx}. {detail}")
+    else:
+        status = info.backend_error or info.backend_summary or "no devices"
+        color = "green" if info.backend_ok else "yellow"
+        lines.append(f"[dim]hashcat backends[/dim]  [{color}]{status}[/{color}]")
+
+    if info.backend_error and info.pci_devices and not info.backend_ok:
+        lines.append(
+            "\n[dim]A GPU may be present in hardware, but hashcat cannot use it "
+            "until the matching OpenCL/CUDA/HIP runtime and driver are installed.[/dim]"
+        )
+    return "\n".join(lines)
+
+
+def show_gpu_info_panel(info: GpuInfo, *, title: str = "GPU information") -> None:
+    style = "green" if info.backend_ok else "yellow"
+    console.print(
+        Panel(
+            format_gpu_info_block(info),
+            title=title,
+            border_style=style,
+            box=box.ROUNDED,
+        )
+    )
+
+
+def hashcat_output_indicates_gpu_error(output: str) -> bool:
+    low = (output or "").lower()
+    return any(hint in low for hint in HASHCAT_GPU_ERROR_HINTS)
+
+
+def warn_hashcat_gpu(title: str, body: str, info: GpuInfo, *, detail: str = "") -> None:
+    parts = [body.rstrip(), "", format_gpu_info_block(info)]
+    if detail.strip():
+        tail = "\n".join(detail.strip().splitlines()[-12:])
+        parts.extend(["", "[dim]hashcat output (tail)[/dim]", f"[dim]{tail}[/dim]"])
+    warn_and_back(title, "\n".join(parts))
 
 
 def list_cap_files(folder: Path) -> list[Path]:
@@ -146,10 +347,11 @@ def read_hashcat_plain(path: Path) -> Optional[str]:
     return last
 
 
-def crack_hashcat(hashfile: Path, wordlist: str) -> tuple[Optional[str], str]:
+def crack_hashcat(hashfile: Path, wordlist: str) -> tuple[Optional[str], str, bool]:
+    """Run hashcat GPU attack. Returns (key, output, is_error)."""
     hashcat = which_or_none("hashcat")
     if not hashcat:
-        return None, "hashcat was not found on PATH"
+        return None, "hashcat was not found on PATH", True
     outfile = hashfile.with_suffix(".cracked")
     cmd = [
         hashcat,
@@ -176,7 +378,7 @@ def crack_hashcat(hashfile: Path, wordlist: str) -> tuple[Optional[str], str]:
             text=True,
         )
     except OSError as exc:
-        return None, str(exc)
+        return None, str(exc), True
 
     collected: list[str] = []
     assert proc.stdout is not None
@@ -197,15 +399,19 @@ def crack_hashcat(hashfile: Path, wordlist: str) -> tuple[Optional[str], str]:
     output = "\n".join(collected)
     found = read_hashcat_plain(outfile)
     if found:
-        return found, output
+        return found, output, False
     low = output.lower()
     if "cracked" in low:
         found = read_hashcat_plain(outfile)
         if found:
-            return found, output
-    if proc.returncode not in {0, 1} and not output:
-        return None, "hashcat exited with an error"
-    return None, output
+            return found, output, False
+    if proc.returncode not in {0, 1}:
+        return None, output or "hashcat exited with an error", True
+    if hashcat_output_indicates_gpu_error(output):
+        return None, output, True
+    if not output and proc.returncode not in {0, 1}:
+        return None, "hashcat exited with an error", True
+    return None, output, False
 
 
 def action_crack_saved(settings: Settings) -> None:
@@ -280,11 +486,27 @@ def action_crack_saved(settings: Settings) -> None:
             return
 
     if use_hashcat:
-        if not which_or_none("hcxpcapngtool"):
+        gpu = collect_gpu_info()
+        show_gpu_info_panel(gpu, title="hashcat · GPU check")
+
+        if not gpu.backend_ok:
+            warn_hashcat_gpu(
+                "hashcat GPU unavailable",
+                "hashcat cannot use a GPU backend on this host right now.\n"
+                "Install the correct OpenCL/CUDA/HIP runtime for your card,\n"
+                "or continue with aircrack-ng (CPU).",
+                gpu,
+                detail=gpu.raw_hashcat_i,
+            )
+            if not confirm("Use aircrack-ng (CPU) instead?", default=True):
+                return
+            use_hashcat = False
+        elif not which_or_none("hcxpcapngtool"):
             console.print(
                 "[yellow]hcxpcapngtool is missing (needed to convert .cap to hashcat 22000).[/yellow]\n"
                 "Install it from menu [bold]5[/bold], or use CPU now.\n"
             )
+            show_gpu_info_panel(gpu, title="hashcat · GPU (ready, conversion blocked)")
             if not confirm("Use aircrack-ng (CPU) instead?", default=True):
                 return
             use_hashcat = False
@@ -292,9 +514,11 @@ def action_crack_saved(settings: Settings) -> None:
             console.print("[dim]Converting capture to hashcat 22000...[/dim]")
             hashfile, conv_err = cap_to_hc22000(capfile)
             if not hashfile:
-                warn_and_back(
+                warn_hashcat_gpu(
                     "Conversion failed",
-                    conv_err + "\n\nYou can retry with aircrack-ng (CPU).",
+                    (conv_err or "Could not convert capture to .hc22000.")
+                    + "\n\nYou can retry with aircrack-ng (CPU).",
+                    gpu,
                 )
                 if not confirm("Use aircrack-ng (CPU) instead?", default=True):
                     return
@@ -302,11 +526,23 @@ def action_crack_saved(settings: Settings) -> None:
             else:
                 console.print(f"[green]Hash file:[/green] {hashfile}\n")
                 console.print("[dim]Running hashcat on GPU...[/dim]\n")
-                key, _out = crack_hashcat(hashfile, settings.wordlist)
+                key, out, is_error = crack_hashcat(hashfile, settings.wordlist)
                 console.print()
-                show_crack_result(key, capfile)
-                pause()
-                return
+                if is_error:
+                    warn_hashcat_gpu(
+                        "hashcat (GPU) failed",
+                        "hashcat stopped with a GPU/backend error before finishing the wordlist.",
+                        collect_gpu_info(),
+                        detail=out,
+                    )
+                    if confirm("Use aircrack-ng (CPU) instead?", default=True):
+                        use_hashcat = False
+                    else:
+                        return
+                else:
+                    show_crack_result(key, capfile)
+                    pause()
+                    return
 
     console.print("[dim]Running aircrack-ng against the wordlist...[/dim]\n")
     key, _out = crack_capture(capfile, bssid, settings.wordlist)

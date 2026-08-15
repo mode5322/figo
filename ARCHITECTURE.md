@@ -2,8 +2,8 @@
 
 **Last updated:** 2026-08-15  
 **Repo:** https://github.com/mode5322/Figo  
-**Branch reviewed:** `main` (3692a38)  
-**Python LOC (app + tests):** ~3800
+**Branch reviewed:** `main` (18bee0d)  
+**Python LOC (app + tests):** ~4590
 
 This file is the source of truth for how Figo is structured. Update it in the same change whenever code, menus, config, safety rules, or layout change.
 
@@ -115,6 +115,8 @@ Figo/
 │           └── templates.py
 └── tests/
     ├── test_figolab.py
+    ├── test_gpu_info.py
+    ├── test_stations.py
     └── test_ui_errors.py
 ```
 
@@ -136,7 +138,7 @@ Figo/
 
 | Module | Responsibility |
 |---|---|
-| `modules/constants.py` | `APP_NAME`, handshake dir, capture timings, `TOOL_PACKAGES`, required/optional bins |
+| `modules/constants.py` | `APP_NAME`, handshake dir, capture timings (`STATION_SCAN_SEC`), `TOOL_PACKAGES`, required/optional bins |
 | `modules/config.py` | `Target`, `Settings`, load/save `~/.config/figo/config.json` |
 | `modules/network.py` | Wireless iface list, `nmcli`/`iw` scan, safe signal sort |
 | `modules/wordlists.py` | Discover wordlists under common dirs |
@@ -147,9 +149,9 @@ Figo/
 
 | Module | Responsibility |
 |---|---|
-| `modules/monitor.py` | Monitor mode via `airmon-ng`, airodump Popen, deauth, injection test |
-| `modules/capture.py` | 90s capture loop with deauth bursts and handshake detection |
-| `modules/cracking.py` | Pick `.cap`, aircrack-ng CPU or hashcat GPU (22000) |
+| `modules/monitor.py` | Monitor mode via `airmon-ng`, airodump Popen, associated-station CSV scan, deauth, injection test |
+| `modules/capture.py` | Pre-confirm client list + 90s capture loop with deauth bursts and handshake detection |
+| `modules/cracking.py` | Pick `.cap`, aircrack-ng CPU or hashcat GPU (22000); GPU probe + alert panels |
 
 ### 4.4 Evil Twin Lab (`modules/figolab`)
 
@@ -247,6 +249,9 @@ Preconditions: adapter, target BSSID, valid channel; **WPA3/SAE is rejected**; r
 
 ```text
 enable monitor (airmon-ng start)
+  → brief airodump CSV scan (STATION_SCAN_SEC=6) for associated clients
+  → "Capture handshake" summary panel (network info + Connected devices list)
+  → confirm Continue?
   → injection test (aireplay-ng -9)
   → airodump-ng --bssid -c -w pcap
   → warmup 4s
@@ -255,6 +260,8 @@ enable monitor (airmon-ng start)
   → timeout 90s
   → stop airodump + airmon stop + restart NetworkManager
 ```
+
+The confirmation panel lists each associated station MAC / power / packets / probes (or “none seen” if the short scan found no clients). Cancel restores the adapter.
 
 Captures land in `handshakes/` (gitignored).
 
@@ -265,12 +272,17 @@ list .cap/.pcap in handshake_dir
   → pick file
   → parse networks in capture (aircrack-ng)
   → if hashcat present: choose 1=CPU / 2=GPU (default GPU)
-  → GPU path: hcxpcapngtool → .hc22000 → hashcat -m 22000
+  → GPU path:
+       collect GPU info (lspci + nvidia-smi + `hashcat -I`)
+       → show GPU information panel
+       → if backend unusable: Warning panel includes GPU details + optional CPU fallback
+       → hcxpcapngtool → .hc22000 → hashcat -m 22000 -D 2
+       → on hashcat GPU/backend failure: Warning panel with GPU details + optional CPU fallback
   → CPU path: aircrack-ng -a2 -w wordlist
 ```
 
 Figo **never** installs NVIDIA/CUDA/ROCm drivers. GPU cracking is host-dependent.
-
+GPU alerts show PCI adapters, `nvidia-smi` rows when available, and hashcat backend device/error text.
 ### 7.3 Evil Twin / Awareness (menu 8)
 
 Submenu:
@@ -335,6 +347,8 @@ Runs on success stop, Ctrl+C, `S`, and startup failure (`try/finally`).
 | Scan `signal` non-numeric | Sort key 0 (no crash) |
 | Missing lab bins | Warning; **no silent apt install** from Evil Twin |
 | Lab AP/DHCP fail | `LabError` with actionable causes |
+| hashcat GPU backend missing / init fail | Warning panel includes PCI + hashcat backend GPU info; optional CPU fallback |
+| hashcat run GPU error | Same GPU detail block in Warning panel; optional CPU fallback |
 
 ---
 
@@ -357,6 +371,8 @@ python3 -m pytest
 | File | Covers |
 |---|---|
 | `tests/test_figolab.py` | SSID/channel validation, hostapd/dnsmasq generation, dependency mock, sessions, metrics credential-safety, process tracker, cleanup idempotence, config backward compatibility, landing HTML has no password field |
+| `tests/test_stations.py` | airodump CSV associated-station parsing for capture summary |
+| `tests/test_gpu_info.py` | hashcat `-I` backend parse + GPU alert text for menu 7 |
 | `tests/test_ui_errors.py` | `parse_menu_index`, EOF/Ctrl+C → BackToMenu/ExitApp, `run_action` swallows unexpected errors |
 
 No physical Wi-Fi hardware is required. Do not claim over-the-air AP/capture was tested unless hardware was actually used.
