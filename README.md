@@ -114,7 +114,16 @@ Menu **8** opens:
 1. **Wi-Fi Lab** — controlled open lab AP (no awareness portal)  
 2. **Security Awareness Lab** — controlled lab AP + local awareness portal  
 3. Configure awareness portal  
+4. Configure lab network (gateway / DHCP)  
 0. Back  
+
+Lab network choices:
+
+- **Default:** `10.66.66.1` with DHCP `10.66.66.10`–`10.66.66.100` (recommended)
+- **Home-style:** `192.168.1.1` with DHCP `192.168.1.10`–`192.168.1.100` (may conflict with real routers)
+- **Customize:** set gateway IP and DHCP range (same /24; gateway outside the pool)
+
+Saved under `lab_network` in `~/.config/figo/config.json`. When starting a lab, Figo asks to confirm or change the addressing before launch.
 
 Workflow (Security Awareness Lab):
 
@@ -183,6 +192,13 @@ Existing fields remain backward compatible. Portal settings are stored under the
 - optional fake training value
 - optional logo path
 
+Lab addressing is stored under `lab_network`:
+
+- preset (`default` / `home` / `custom`)
+- gateway_ip
+- dhcp_range_start
+- dhcp_range_end
+
 ## Cleanup
 
 Evil Twin Lab uses one central cleanup path:
@@ -209,7 +225,7 @@ Possible causes:
 - NetworkManager still managing the interface
 
 **Portal not reachable**  
-Clients must join the lab SSID. Portal binds to the lab gateway IP (default `10.66.66.1:8080`). DNS is redirected locally via dnsmasq for captive-portal style discovery.
+Clients must join the lab SSID. Portal binds to the configured lab gateway IP (default `10.66.66.1:8080`, or `192.168.1.1:8080` / custom if selected). DNS is redirected locally via dnsmasq for captive-portal style discovery.
 
 **Ctrl+C did not restore Wi-Fi**  
 Re-run cleanup by starting/stopping the lab again, or manually: `nmcli device set <iface> managed yes` and reconnect.

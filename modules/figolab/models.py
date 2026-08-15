@@ -52,6 +52,100 @@ def validate_bssid(bssid: str) -> tuple[bool, str]:
     return True, ""
 
 
+def validate_ipv4(ip: str) -> tuple[bool, str]:
+    value = (ip or "").strip()
+    if not re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", value):
+        return False, "IP must look like 192.168.1.1"
+    parts = [int(p) for p in value.split(".")]
+    if any(p < 0 or p > 255 for p in parts):
+        return False, "Each IP octet must be 0–255."
+    if parts[0] == 0 or parts[3] in {0, 255}:
+        return False, "Gateway/host IP cannot use .0 or .255 as the last octet."
+    return True, ""
+
+
+def _ip_to_int(ip: str) -> int:
+    a, b, c, d = (int(x) for x in ip.split("."))
+    return (a << 24) | (b << 16) | (c << 8) | d
+
+
+def same_slash24(a: str, b: str) -> bool:
+    try:
+        return _ip_to_int(a) >> 8 == _ip_to_int(b) >> 8
+    except (TypeError, ValueError):
+        return False
+
+
+def validate_lab_network(
+    gateway_ip: str,
+    dhcp_range_start: str,
+    dhcp_range_end: str,
+) -> tuple[bool, str]:
+    for label, value in (
+        ("Gateway IP", gateway_ip),
+        ("DHCP start", dhcp_range_start),
+        ("DHCP end", dhcp_range_end),
+    ):
+        ok, err = validate_ipv4(value)
+        if not ok:
+            return False, f"{label}: {err}"
+    gw = gateway_ip.strip()
+    start = dhcp_range_start.strip()
+    end = dhcp_range_end.strip()
+    if not same_slash24(gw, start) or not same_slash24(gw, end):
+        return False, "Gateway and DHCP range must be in the same /24 subnet."
+    if _ip_to_int(start) > _ip_to_int(end):
+        return False, "DHCP start must be less than or equal to DHCP end."
+    gw_i = _ip_to_int(gw)
+    if _ip_to_int(start) <= gw_i <= _ip_to_int(end):
+        return False, "Gateway IP must not fall inside the DHCP range."
+    return True, ""
+
+
+LAB_NETWORK_PRESETS: dict[str, dict[str, str]] = {
+    "default": {
+        "preset": "default",
+        "gateway_ip": "10.66.66.1",
+        "dhcp_range_start": "10.66.66.10",
+        "dhcp_range_end": "10.66.66.100",
+    },
+    "home": {
+        "preset": "home",
+        "gateway_ip": "192.168.1.1",
+        "dhcp_range_start": "192.168.1.10",
+        "dhcp_range_end": "192.168.1.100",
+    },
+}
+
+
+def normalize_lab_network(raw: Optional[dict[str, Any]] = None) -> dict[str, str]:
+    """Return a complete lab network dict; defaults to 10.66.66.x."""
+    base = dict(LAB_NETWORK_PRESETS["default"])
+    raw = raw or {}
+    preset = str(raw.get("preset", "") or "").strip().lower()
+    if preset in LAB_NETWORK_PRESETS and preset != "custom":
+        return dict(LAB_NETWORK_PRESETS[preset])
+    gateway = str(raw.get("gateway_ip", base["gateway_ip"]) or base["gateway_ip"]).strip()
+    start = str(raw.get("dhcp_range_start", base["dhcp_range_start"]) or base["dhcp_range_start"]).strip()
+    end = str(raw.get("dhcp_range_end", base["dhcp_range_end"]) or base["dhcp_range_end"]).strip()
+    known = next(
+        (
+            name
+            for name, preset_data in LAB_NETWORK_PRESETS.items()
+            if preset_data["gateway_ip"] == gateway
+            and preset_data["dhcp_range_start"] == start
+            and preset_data["dhcp_range_end"] == end
+        ),
+        "custom",
+    )
+    return {
+        "preset": known if preset != "custom" else "custom",
+        "gateway_ip": gateway,
+        "dhcp_range_start": start,
+        "dhcp_range_end": end,
+    }
+
+
 @dataclass
 class PortalConfig:
     enabled: bool = True
@@ -131,6 +225,13 @@ class LabConfig:
             return False, "Wireless interface is required."
         if self.lab_mode not in {"wifi", "awareness"}:
             return False, "Lab mode must be 'wifi' or 'awareness'."
+        ok, err = validate_lab_network(
+            self.gateway_ip,
+            self.dhcp_range_start,
+            self.dhcp_range_end,
+        )
+        if not ok:
+            return False, err
         return True, ""
 
     def to_dict(self) -> dict[str, Any]:

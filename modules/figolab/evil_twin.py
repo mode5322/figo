@@ -23,7 +23,15 @@ from modules.figolab.lab_session import (
     detect_lab_dependencies,
     start_lab_session,
 )
-from modules.figolab.models import LAB_PACKAGES, LabConfig, PortalConfig, channel_band
+from modules.figolab.models import (
+    LAB_NETWORK_PRESETS,
+    LAB_PACKAGES,
+    LabConfig,
+    PortalConfig,
+    channel_band,
+    normalize_lab_network,
+    validate_lab_network,
+)
 
 console = Console()
 
@@ -40,6 +48,7 @@ def action_evil_twin_lab(settings: Any, api: Any) -> None:
             table.add_row("1", "Wi-Fi Lab")
             table.add_row("2", "Security Awareness Lab")
             table.add_row("3", "Configure awareness portal")
+            table.add_row("4", "Configure lab network (gateway / DHCP)")
             table.add_row("0", "Back")
             console.print(
                 Panel(
@@ -68,8 +77,13 @@ def action_evil_twin_lab(settings: Any, api: Any) -> None:
                     run("Configure awareness portal", _configure_portal, settings, api)
                 else:
                     _configure_portal(settings, api)
+            elif choice == "4":
+                if run:
+                    run("Configure lab network", _configure_lab_network, settings, api)
+                else:
+                    _configure_lab_network(settings, api)
             else:
-                api.warn_and_back("Unknown option", "Enter 0–3.")
+                api.warn_and_back("Unknown option", "Enter 0–4.")
         except BackToMenu:
             return
         except ExitApp:
@@ -121,6 +135,99 @@ def _configure_portal(settings: Any, api: Any) -> None:
         return
     console.print("\n[green]Portal configuration saved.[/green]")
     console.print("[dim]Real passwords are never collected or stored.[/dim]")
+    api.pause()
+
+
+def _lab_network_from_settings(settings: Any) -> dict[str, str]:
+    return normalize_lab_network(getattr(settings, "lab_network", None))
+
+
+def _save_lab_network(settings: Any, api: Any, network: dict[str, str]) -> bool:
+    settings.lab_network = normalize_lab_network(network)
+    try:
+        api.save_settings(settings)
+    except OSError as exc:
+        api.warn_and_back("Could not save settings", str(exc))
+        return False
+    return True
+
+
+def _prompt_custom_lab_network(api: Any, current: dict[str, str]) -> Optional[dict[str, str]]:
+    gateway = (
+        api.ask("Gateway IP", default=current.get("gateway_ip", "10.66.66.1")).strip()
+        or current.get("gateway_ip", "10.66.66.1")
+    )
+    dhcp_start = (
+        api.ask("DHCP range start", default=current.get("dhcp_range_start", "10.66.66.10")).strip()
+        or current.get("dhcp_range_start", "10.66.66.10")
+    )
+    dhcp_end = (
+        api.ask("DHCP range end", default=current.get("dhcp_range_end", "10.66.66.100")).strip()
+        or current.get("dhcp_range_end", "10.66.66.100")
+    )
+    ok, err = validate_lab_network(gateway, dhcp_start, dhcp_end)
+    if not ok:
+        api.warn_and_back("Invalid lab network", err)
+        return None
+    return normalize_lab_network(
+        {
+            "preset": "custom",
+            "gateway_ip": gateway,
+            "dhcp_range_start": dhcp_start,
+            "dhcp_range_end": dhcp_end,
+        }
+    )
+
+
+def _configure_lab_network(settings: Any, api: Any) -> None:
+    """Menu 8 → 4: choose default / home-style / custom gateway+DHCP."""
+    api.clear_screen()
+    current = _lab_network_from_settings(settings)
+    console.print(
+        Panel(
+            f"Current gateway : {current['gateway_ip']}\n"
+            f"DHCP range      : {current['dhcp_range_start']} – {current['dhcp_range_end']}\n"
+            f"Preset          : {current.get('preset', 'default')}",
+            title="Lab network (gateway / DHCP)",
+            border_style="cyan",
+        )
+    )
+    table = Table(show_header=False, box=box.SIMPLE, expand=True, padding=(0, 1))
+    table.add_column("key", style="bold yellow", width=4)
+    table.add_column("label")
+    table.add_row("1", "Default lab network  ·  10.66.66.1  (DHCP 10.66.66.10–100)")
+    table.add_row("2", "Home-style network   ·  192.168.1.1  (DHCP 192.168.1.10–100)")
+    table.add_row("3", "Customize gateway IP and DHCP range")
+    table.add_row("0", "Back / keep current")
+    console.print(Panel(table, title="Choose addressing", border_style="green", box=box.ROUNDED))
+    if current.get("preset") == "home":
+        console.print(
+            "[yellow]Note:[/yellow] 192.168.1.1 often conflicts with real home routers. "
+            "Prefer 10.66.66.1 for clean lab use.\n"
+        )
+
+    choice = api.ask("Choose a number", default="").strip()
+    if choice in {"", "0"}:
+        return
+    if choice == "1":
+        network = dict(LAB_NETWORK_PRESETS["default"])
+    elif choice == "2":
+        network = dict(LAB_NETWORK_PRESETS["home"])
+    elif choice == "3":
+        network = _prompt_custom_lab_network(api, current)
+        if network is None:
+            return
+    else:
+        api.warn_and_back("Unknown option", "Enter 0–3.")
+        return
+
+    if not _save_lab_network(settings, api, network):
+        return
+    saved = _lab_network_from_settings(settings)
+    console.print(
+        f"\n[green]Lab network saved:[/green] gateway [bold]{saved['gateway_ip']}[/bold] · "
+        f"DHCP {saved['dhcp_range_start']}–{saved['dhcp_range_end']}"
+    )
     api.pause()
 
 
@@ -200,6 +307,7 @@ def _show_target_info(row: dict[str, str], interface: str) -> None:
 def _build_lab_config(settings: Any, row: dict[str, str], mode: str) -> LabConfig:
     portal = _portal_from_settings(settings)
     portal_enabled = mode == "awareness" and portal.enabled
+    network = _lab_network_from_settings(settings)
     return LabConfig(
         target_ssid=row.get("ssid", ""),
         target_bssid=row.get("bssid", ""),
@@ -211,6 +319,9 @@ def _build_lab_config(settings: Any, row: dict[str, str], mode: str) -> LabConfi
         portal_enabled=portal_enabled,
         portal=portal,
         ap_ssid=row.get("ssid", ""),
+        gateway_ip=network["gateway_ip"],
+        dhcp_range_start=network["dhcp_range_start"],
+        dhcp_range_end=network["dhcp_range_end"],
     )
 
 
@@ -220,6 +331,8 @@ def _confirm_start(config: LabConfig, api: Any) -> bool:
         f"Channel     : {config.channel}\n"
         f"Security    : {config.security}\n"
         f"Interface   : {config.interface}\n"
+        f"Gateway IP  : {config.gateway_ip}\n"
+        f"DHCP range  : {config.dhcp_range_start} – {config.dhcp_range_end}\n"
         f"Portal      : {'Enabled' if config.portal_enabled else 'Disabled'}\n"
         f"{'─' * 38}\n"
         "This is an authorized security lab.\n"
@@ -254,6 +367,19 @@ def _run_lab_flow(settings: Any, api: Any, *, mode: str) -> None:
     api.clear_screen()
     _show_target_info(row, settings.interface)
     api.pause("Press Enter to configure the lab AP...")
+
+    network = _lab_network_from_settings(settings)
+    console.print(
+        Panel(
+            f"Gateway IP : {network['gateway_ip']}\n"
+            f"DHCP range : {network['dhcp_range_start']} – {network['dhcp_range_end']}\n"
+            f"Preset     : {network.get('preset', 'default')}",
+            title="Lab network",
+            border_style="cyan",
+        )
+    )
+    if not api.confirm("Use this lab network (gateway / DHCP)?", default=True):
+        _configure_lab_network(settings, api)
 
     config = _build_lab_config(settings, row, mode)
     if mode == "awareness":
@@ -307,6 +433,8 @@ def _dashboard_renderable(session) -> Panel:
     body = (
         f"SSID: {session.config.effective_ssid()}\n"
         f"Channel: {session.config.channel}  ·  Band: {channel_band(session.config.channel)}\n"
+        f"Gateway: {session.config.gateway_ip}\n"
+        f"DHCP: {session.config.dhcp_range_start} – {session.config.dhcp_range_end}\n"
         f"AP: {ap}\n"
         f"Portal: {portal}\n"
         f"Runtime: {session.runtime_sec()}s\n"

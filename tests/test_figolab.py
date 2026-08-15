@@ -16,7 +16,15 @@ from modules.figolab.awareness.metrics import (
 )
 from modules.figolab.awareness.session import SessionStore, new_session_id
 from modules.figolab.lab_session import LabSession, cleanup_lab_session, detect_lab_dependencies
-from modules.figolab.models import LabConfig, PortalConfig, channel_band, validate_channel, validate_ssid
+from modules.figolab.models import (
+    LabConfig,
+    PortalConfig,
+    channel_band,
+    normalize_lab_network,
+    validate_channel,
+    validate_lab_network,
+    validate_ssid,
+)
 from modules.figolab.processes import ProcessTracker
 
 
@@ -41,6 +49,48 @@ def test_lab_config_validation():
     assert ok, err
     bad = LabConfig(target_ssid="", channel="6", interface="wlan0")
     assert bad.validate()[0] is False
+
+
+def test_lab_network_presets_and_validation():
+    default = normalize_lab_network({"preset": "default"})
+    assert default["gateway_ip"] == "10.66.66.1"
+    home = normalize_lab_network({"preset": "home"})
+    assert home["gateway_ip"] == "192.168.1.1"
+    assert home["dhcp_range_start"] == "192.168.1.10"
+    assert validate_lab_network("10.66.66.1", "10.66.66.10", "10.66.66.100")[0] is True
+    assert validate_lab_network("192.168.1.1", "192.168.1.10", "192.168.1.100")[0] is True
+    # Gateway inside DHCP range
+    assert validate_lab_network("10.66.66.50", "10.66.66.10", "10.66.66.100")[0] is False
+    # Different subnet
+    assert validate_lab_network("10.66.66.1", "192.168.1.10", "192.168.1.100")[0] is False
+    custom = normalize_lab_network(
+        {
+            "preset": "custom",
+            "gateway_ip": "10.99.0.1",
+            "dhcp_range_start": "10.99.0.20",
+            "dhcp_range_end": "10.99.0.50",
+        }
+    )
+    assert custom["preset"] == "custom"
+    assert custom["gateway_ip"] == "10.99.0.1"
+
+
+def test_dnsmasq_uses_custom_gateway(tmp_path: Path):
+    cfg = LabConfig(
+        target_ssid="ExampleNetwork",
+        channel="6",
+        interface="wlan0",
+        ap_interface="wlan0",
+        gateway_ip="192.168.1.1",
+        dhcp_range_start="192.168.1.10",
+        dhcp_range_end="192.168.1.100",
+    )
+    leases = tmp_path / "leases"
+    dnsmasq = build_dnsmasq_conf(cfg, tmp_path / "dnsmasq.conf", leases_path=leases)
+    dtext = dnsmasq.read_text(encoding="utf-8")
+    assert "192.168.1.1" in dtext
+    assert "192.168.1.10,192.168.1.100" in dtext
+    assert validate_lab_network(cfg.gateway_ip, cfg.dhcp_range_start, cfg.dhcp_range_end)[0]
 
 
 def test_portal_config_roundtrip():
@@ -166,11 +216,14 @@ def test_settings_persistence_backward_compatible(tmp_path: Path, monkeypatch):
     settings = config.load_settings()
     assert settings.interface == "wlan0"
     assert isinstance(settings.portal, dict)
+    assert isinstance(settings.lab_network, dict)
 
     settings.portal = PortalConfig(organization="Org").to_dict()
+    settings.lab_network = normalize_lab_network({"preset": "home"})
     config.save_settings(settings)
     reloaded = config.load_settings()
     assert reloaded.portal.get("organization") == "Org"
+    assert reloaded.lab_network.get("gateway_ip") == "192.168.1.1"
 
 
 def test_landing_template_has_no_password_field():

@@ -25,6 +25,7 @@ class Settings:
     handshake_dir: str = DEFAULT_HANDSHAKE_DIR
     target: Target = field(default_factory=Target)
     portal: dict = field(default_factory=dict)
+    lab_network: dict = field(default_factory=dict)
 
 
 def load_settings() -> Settings:
@@ -43,12 +44,16 @@ def load_settings() -> Settings:
         portal_raw = raw.get("portal", {}) or {}
         if not isinstance(portal_raw, dict):
             portal_raw = {}
+        lab_network_raw = raw.get("lab_network", {}) or {}
+        if not isinstance(lab_network_raw, dict):
+            lab_network_raw = {}
         return Settings(
             interface=raw.get("interface", ""),
             wordlist=raw.get("wordlist", ""),
             handshake_dir=raw.get("handshake_dir") or DEFAULT_HANDSHAKE_DIR,
             target=target,
             portal=portal_raw,
+            lab_network=lab_network_raw,
         )
     except (OSError, json.JSONDecodeError, TypeError):
         return Settings()
@@ -61,12 +66,14 @@ def save_settings(settings: Settings) -> None:
         portal = portal.to_dict()
     elif not isinstance(portal, dict):
         portal = {}
+    lab_network = settings.lab_network if isinstance(settings.lab_network, dict) else {}
     payload = {
         "interface": settings.interface,
         "wordlist": settings.wordlist,
         "handshake_dir": settings.handshake_dir or DEFAULT_HANDSHAKE_DIR,
         "target": asdict(settings.target),
         "portal": portal,
+        "lab_network": lab_network,
     }
     try:
         CONFIG_FILE.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")

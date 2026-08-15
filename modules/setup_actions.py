@@ -180,6 +180,13 @@ def action_show_settings(settings: Settings) -> None:
     table.add_row("Awareness portal", "enabled" if portal.get("enabled", True) else "disabled")
     if portal.get("organization"):
         table.add_row("Organization", str(portal.get("organization")))
+    lab_network = settings.lab_network if isinstance(settings.lab_network, dict) else {}
+    if lab_network.get("gateway_ip"):
+        table.add_row("Lab gateway", str(lab_network.get("gateway_ip")))
+        table.add_row(
+            "Lab DHCP",
+            f"{lab_network.get('dhcp_range_start', '-')} – {lab_network.get('dhcp_range_end', '-')}",
+        )
     table.add_row("Config file", str(CONFIG_FILE))
     console.print(table)
     pause()

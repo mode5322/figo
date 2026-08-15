@@ -1,8 +1,8 @@
 # Figo — Architecture
 
-**Last updated:** 2026-08-14  
+**Last updated:** 2026-08-15  
 **Repo:** https://github.com/mode5322/Figo  
-**Branch reviewed:** `main` (`20b4c87`)  
+**Branch reviewed:** `main` (pending lab-network commit)  
 **Python LOC (app + tests):** ~3800
 
 This file is the source of truth for how Figo is structured. Update it in the same change whenever code, menus, config, safety rules, or layout change.
@@ -191,6 +191,7 @@ Evil Twin submenu (8):
   1  Wi-Fi Lab              (open AP, no portal)
   2  Security Awareness Lab (open AP + portal)
   3  Configure awareness portal
+  4  Configure lab network (gateway / DHCP)
   0  Back
 ```
 
@@ -223,11 +224,18 @@ Evil Twin submenu (8):
     "training_value": "",
     "logo_path": "",
     "session_ttl_sec": 3600
+  },
+  "lab_network": {
+    "preset": "default",
+    "gateway_ip": "10.66.66.1",
+    "dhcp_range_start": "10.66.66.10",
+    "dhcp_range_end": "10.66.66.100"
   }
 }
 ```
 
 Save failures raise `OSError` and are shown to the user (not a silent crash).
+`lab_network` is optional for backward compatibility; missing key defaults to `10.66.66.x`.
 
 ---
 
@@ -265,14 +273,33 @@ Figo **never** installs NVIDIA/CUDA/ROCm drivers. GPU cracking is host-dependent
 
 ### 7.3 Evil Twin / Awareness (menu 8)
 
+Submenu:
+
+```text
+  1  Wi-Fi Lab
+  2  Security Awareness Lab
+  3  Configure awareness portal
+  4  Configure lab network (gateway / DHCP)
+  0  Back
+```
+
+Lab network presets (saved under `lab_network` in config.json):
+
+| Choice | Gateway | DHCP |
+|---|---|---|
+| Default | `10.66.66.1` | `10.66.66.10`–`10.66.66.100` |
+| Home-style | `192.168.1.1` | `192.168.1.10`–`192.168.1.100` |
+| Customize | operator-defined | operator-defined (same /24, gateway outside range) |
+
 ```text
 ensure root + hostapd/dnsmasq/iw/ip
   → scan (reuse modules.network.scan_networks)
   → pick authorized target
+  → confirm / configure lab network (gateway + DHCP)
   → optional portal config
   → explicit Y/N confirmation (never auto-start)
   → snapshot iface + unmanage NM
-  → assign 10.66.66.1/24
+  → assign configured gateway/24
   → hostapd (open AP, wpa=0) + dnsmasq DHCP/DNS
   → awareness HTTP on gateway:8080 (mode=awareness)
   → live Rich dashboard; S or Ctrl+C
@@ -280,6 +307,8 @@ ensure root + hostapd/dnsmasq/iw/ip
 ```
 
 Lab AP is **intentionally open**. Awareness happens in the portal, not via a fake WPA password.
+
+`192.168.1.1` may conflict with real home routers; `10.66.66.1` remains the recommended default.
 
 Cleanup:
 
