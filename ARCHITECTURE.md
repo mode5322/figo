@@ -235,7 +235,7 @@ Evil Twin end-to-end.
   "portal": {
     "enabled": true,
     "organization": "",
-    "portal_title": "SECURITY AWARENESS TEST",
+    "portal_title": "Wi-Fi Authentication",
     "training_message": "...",
     "security_contact": "",
     "educational_message": "",

@@ -144,7 +144,7 @@ Saved under `lab_network` in `~/.config/figo/config.json`. When starting a lab, 
 
 **Captive portal (auto pop-up):** the awareness portal listens on port **80** (where phones/laptops send captive-portal probes) in addition to the configured `portal_port`, and answers every request with the portal page. This makes the sign-in page appear automatically on connected devices instead of requiring the user to open a browser. dnsmasq resolves all DNS to the lab gateway to support this.
 
-**Realistic (blind) scenario:** the client-facing pages are deliberately neutral — a normal-looking Wi-Fi sign-in page, and after submission an ordinary "You are connected" confirmation. They do **not** reveal that this is a simulation. The participant only learns it was an authorized awareness test later, during the **debrief / manual report**, using the operator's screenshots from the live Evil Twin dashboard and the configured educational message. (Credential safety is unchanged — the password is still never stored.)
+**Realistic (blind) scenario:** the client-facing pages are a classic Wi-Fi password form, then an ordinary "You are connected" confirmation.
 
 The live Awareness dashboard shows behaviour events (clients, portal opens, sign-in submissions, **passwords entered**, completions) without ever storing passwords. This dashboard is the source of the screenshots for the manual report.
 
