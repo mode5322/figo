@@ -27,12 +27,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import TYPE_CHECKING, Optional
 from urllib.parse import parse_qs
 
-from modules.figolab.awareness import templates
-from modules.figolab.awareness.metrics import MetricsStore, safe_record_interaction
-from modules.figolab.awareness.session import SessionStore
+from modules.figolab.awareness import portal_pages as templates
+from modules.figolab.awareness.awareness_metrics import MetricsStore, safe_record_interaction
+from modules.figolab.awareness.client_sessions import SessionStore
 
 if TYPE_CHECKING:
-    from modules.figolab.models import LabConfig
+    from modules.figolab.lab_config import LabConfig
 
 # Standard port used by OS captive-portal probes.
 CAPTIVE_PORT = 80

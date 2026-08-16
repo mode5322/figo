@@ -96,7 +96,7 @@ def login_page(
     A realistic-looking Wi-Fi/network sign-in page used only for the awareness
     simulation. IMPORTANT: the form is posted to /login and the submitted
     password is discarded immediately by the server — it is never stored,
-    logged, or transmitted anywhere. See portal.py do_POST.
+    logged, or transmitted anywhere. See portal_server.py do_POST.
     """
     org = f"<p class='muted'>{_e(organization)}</p>" if organization else ""
     heading = _e(organization or title)

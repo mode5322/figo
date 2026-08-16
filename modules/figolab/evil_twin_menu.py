@@ -26,7 +26,7 @@ from modules.figolab.lab_session import (
     save_session_report,
     start_lab_session,
 )
-from modules.figolab.models import (
+from modules.figolab.lab_config import (
     LAB_NETWORK_PRESETS,
     LAB_PACKAGES,
     LabConfig,

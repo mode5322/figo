@@ -11,16 +11,20 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-from modules.figolab.ap import (
+from modules.figolab.ap_configs import (
     build_dnsmasq_conf,
     build_hostapd_conf,
     count_dhcp_leases,
     parse_dhcp_leases,
 )
-from modules.figolab.awareness.metrics import MetricsStore, assert_no_sensitive_payload, utc_now_iso
-from modules.figolab.awareness.portal import AwarenessPortal
-from modules.figolab.awareness.session import SessionStore
-from modules.figolab.interface import (
+from modules.figolab.awareness.awareness_metrics import (
+    MetricsStore,
+    assert_no_sensitive_payload,
+    utc_now_iso,
+)
+from modules.figolab.awareness.portal_server import AwarenessPortal
+from modules.figolab.awareness.client_sessions import SessionStore
+from modules.figolab.wireless_interface import (
     InterfaceSnapshot,
     restore_interface,
     rfkill_unblock,
@@ -28,8 +32,8 @@ from modules.figolab.interface import (
     snapshot_interface,
     stop_interfering_processes,
 )
-from modules.figolab.models import LAB_BINS, LabConfig, channel_band
-from modules.figolab.processes import ProcessTracker
+from modules.figolab.lab_config import LAB_BINS, LabConfig, channel_band
+from modules.figolab.process_tracker import ProcessTracker
 
 
 class LabError(RuntimeError):

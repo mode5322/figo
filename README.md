@@ -14,7 +14,6 @@ figo/
 ├── README.md
 ├── ARCHITECTURE.md      # living architecture map
 ├── requirements.txt
-├── pytest.ini
 ├── modules/             # application modules (split from the old monolith)
 │   ├── cli.py
 │   ├── config.py
@@ -23,12 +22,23 @@ figo/
 │   ├── menu.py
 │   ├── monitor.py
 │   ├── network.py
+│   ├── preflight.py
 │   ├── setup_actions.py
 │   ├── tools.py
 │   ├── ui.py
 │   ├── wordlists.py
-│   └── figolab/         # Evil Twin Lab + awareness portal
-└── tests/
+│   └── figolab/                 # Evil Twin Lab + awareness portal
+│       ├── evil_twin_menu.py    # Evil Twin submenu (setup + run actions)
+│       ├── lab_config.py        # LabConfig / PortalConfig models + validation
+│       ├── lab_session.py       # start / dashboard / cleanup orchestration
+│       ├── ap_configs.py        # hostapd + dnsmasq config builders, lease parsing
+│       ├── wireless_interface.py# interface snapshot / AP-mode prep / restore
+│       ├── process_tracker.py   # child-process lifecycle tracking
+│       └── awareness/
+│           ├── portal_server.py     # captive-portal HTTP server (ports 80 + configured)
+│           ├── portal_pages.py      # sign-in / connected / report HTML
+│           ├── client_sessions.py   # per-client session store
+│           └── awareness_metrics.py # non-sensitive behavioral metrics
 ```
 
 Root keeps the normal user-facing files. All library code lives under `modules/`.
@@ -274,15 +284,6 @@ Open APs always warn on clients. Set **AP security → WPA2** in *Configure lab 
 
 **Ctrl+C did not restore Wi-Fi**  
 Re-run cleanup by starting/stopping the lab again, or manually: `nmcli device set <iface> managed yes` and reconnect.
-
-## Tests
-
-```bash
-python3 -m pip install -r requirements.txt pytest
-python3 -m pytest
-```
-
-Tests mock subprocess/network operations and do not require Wi-Fi hardware.
 
 ## Safety boundary
 

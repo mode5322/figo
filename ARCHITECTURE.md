@@ -95,7 +95,6 @@ Figo/
 ├── README.md                 # user docs
 ├── ARCHITECTURE.md           # this file
 ├── requirements.txt          # rich>=13
-├── pytest.ini
 ├── .gitignore
 ├── .cursor/rules/architecture.mdc
 ├── modules/                  # application package
@@ -113,23 +112,18 @@ Figo/
 │   ├── monitor.py            # airmon/airodump/aireplay helpers
 │   ├── capture.py            # menu 6
 │   ├── cracking.py           # menu 7
-│   └── figolab/              # menu 8 Evil Twin + awareness
-│       ├── evil_twin.py      # lab CLI
-│       ├── lab_session.py    # start/cleanup orchestration
-│       ├── ap.py             # hostapd/dnsmasq config builders
-│       ├── interface.py      # snapshot/restore NM + iface
-│       ├── processes.py      # tracked Popen children
-│       ├── models.py         # LabConfig / PortalConfig
+│   └── figolab/                  # menu 8 Evil Twin + awareness
+│       ├── evil_twin_menu.py     # lab submenu CLI (setup + run)
+│       ├── lab_session.py        # start/dashboard/cleanup orchestration
+│       ├── ap_configs.py         # hostapd/dnsmasq config builders + lease parsing
+│       ├── wireless_interface.py # snapshot/restore NM + iface, AP-mode prep
+│       ├── process_tracker.py    # tracked Popen children
+│       ├── lab_config.py         # LabConfig / PortalConfig models + validation
 │       └── awareness/
-│           ├── portal.py     # ThreadingHTTPServer
-│           ├── session.py
-│           ├── metrics.py
-│           └── templates.py
-└── tests/
-    ├── test_figolab.py
-    ├── test_gpu_info.py
-    ├── test_stations.py
-    └── test_ui_errors.py
+│           ├── portal_server.py     # ThreadingHTTPServer captive portal
+│           ├── client_sessions.py   # per-client session store
+│           ├── awareness_metrics.py # non-sensitive behavioral counters
+│           └── portal_pages.py      # sign-in / connected / report HTML
 ```
 
 ---
@@ -170,16 +164,16 @@ Figo/
 
 | Module | Responsibility |
 |---|---|
-| `evil_twin.py` | Submenu (Setup/Requirements then Run); run flow, live dashboard (health + client list), report save prompt |
-| `models.py` | `LabConfig`, `PortalConfig`, SSID/channel/passphrase validation, lab bins |
+| `evil_twin_menu.py` | Submenu (Setup/Requirements then Run); run flow, live dashboard (health + client list), report save prompt |
+| `lab_config.py` | `LabConfig`, `PortalConfig`, SSID/channel/passphrase validation, lab bins |
 | `lab_session.py` | Harden + prepare iface, start hostapd/dnsmasq/portal with captured logs, `ensure_services()` self-heal, `build_session_report()`/`save_session_report()`, `cleanup_lab_session()` |
-| `ap.py` | Write hostapd (open **or WPA2-PSK**) + dnsmasq configs; `parse_dhcp_leases()` client records |
-| `interface.py` | Snapshot operstate/mode/addrs/NM; restore after lab; `rfkill_unblock()`, `stop_interfering_processes()` |
-| `processes.py` | Track only Figo-started children; SIGTERM then kill |
-| `awareness/portal.py` | Local HTTP portal; binds port 80 + `portal_port`; catch-all serves sign-in; `/login` discards password value, records boolean behaviour only |
-| `awareness/session.py` | UUID-like `secrets.token_urlsafe` sessions with TTL |
-| `awareness/metrics.py` | In-memory counters (incl. `login_submissions`, `passwords_entered`); refuse sensitive keys |
-| `awareness/templates.py` | HTML sign-in / landing / result pages (result lists recorded behaviours) |
+| `ap_configs.py` | Write hostapd (open **or WPA2-PSK**) + dnsmasq configs; `parse_dhcp_leases()` client records |
+| `wireless_interface.py` | Snapshot operstate/mode/addrs/NM; restore after lab; `rfkill_unblock()`, `stop_interfering_processes()` |
+| `process_tracker.py` | Track only Figo-started children; SIGTERM then kill |
+| `awareness/portal_server.py` | Local HTTP portal; binds port 80 + `portal_port`; catch-all serves sign-in; `/login` discards password value, records boolean behaviour only |
+| `awareness/client_sessions.py` | UUID-like `secrets.token_urlsafe` sessions with TTL |
+| `awareness/awareness_metrics.py` | In-memory counters (incl. `login_submissions`, `passwords_entered`); refuse sensitive keys |
+| `awareness/portal_pages.py` | HTML sign-in / connected / report pages (operator report lists recorded behaviours) |
 
 ---
 
@@ -423,28 +417,29 @@ Python dependency: `rich>=13.0.0`.
 
 ---
 
-## 10. Tests
+## 10. Verification
+
+The automated `tests/` suite was removed at the maintainer's request. Verify
+changes with import + smoke checks instead:
 
 ```bash
-python3 -m pytest
+# import graph must load cleanly
+python3 -c "import figo, modules.cli, modules.figolab.evil_twin_menu, modules.figolab.lab_session"
+
+# core flows: config builders, portal pages, metrics (no hardware needed)
+python3 -c "from modules.figolab.ap_configs import build_hostapd_conf; \
+from modules.figolab.awareness import portal_pages; print('ok')"
 ```
 
-| File | Covers |
-|---|---|
-| `tests/test_figolab.py` | SSID/channel validation, hostapd/dnsmasq generation, dependency mock, sessions, metrics credential-safety (submitted value never retained), process tracker, cleanup idempotence, config backward compatibility |
-| `tests/test_preflight_lab_upgrades.py` | Preflight/adapter probe, dry-run, WPA2 vs open hostapd, AP passphrase validation, sign-in page markup, `/login` boolean-only recording, captive port constant, connected-page no-reveal, DHCP lease parsing, hostapd log-tail read, `stop_interfering_processes` safety, session report has no secrets |
-| `tests/test_stations.py` | airodump CSV associated-station parsing for capture summary |
-| `tests/test_gpu_info.py` | hashcat `-I` backend parse + GPU alert text for menu 7 |
-| `tests/test_ui_errors.py` | `parse_menu_index`, EOF/Ctrl+C → BackToMenu/ExitApp, `run_action` swallows unexpected errors |
-
-No physical Wi-Fi hardware is required. Do not claim over-the-air AP/capture was tested unless hardware was actually used.
+No physical Wi-Fi hardware is required for import/smoke checks. Do not claim
+over-the-air AP/capture was tested unless hardware was actually used.
 
 ---
 
 ## 11. Known limitations / debt
 
 1. `render_banner()` is a no-op.
-2. Lab AP is open (`wpa=0`); it does not clone WPA2 encryption of the target.
+2. Lab AP supports open (`wpa=0`) or WPA2-PSK (`wpa=2`) with a shared passphrase; it does not clone the exact PSK of the target.
 3. Portal `logo_path` is stored but not rendered in HTML yet.
 4. Pure WPA3/SAE capture remains unsupported (by design); mixed WPA2/WPA3 can continue with an explicit caution.
 5. Hashcat GPU depends on a host backend that the operator already installed; Figo only warns and falls back to CPU.

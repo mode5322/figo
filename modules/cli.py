@@ -51,7 +51,7 @@ def _evil_twin_api():
 
 
 def action_evil_twin(settings: Settings) -> None:
-    from modules.figolab.evil_twin import action_evil_twin_lab
+    from modules.figolab.evil_twin_menu import action_evil_twin_lab
 
     action_evil_twin_lab(settings, _evil_twin_api())
 
