@@ -199,7 +199,7 @@ Non-sensitive metrics only, for example:
 
 ### Sign-in simulation (password field)
 
-To realistically measure behaviour, the portal shows a **neutral sign-in page with a password field** (enable/disable via *Configure awareness portal → Show a sign-in page*). This simulates an employee logging in on an unexpected Wi-Fi page. When the form is submitted:
+To realistically measure behaviour, the portal shows a **classic password-only sign-in page** (enable/disable via *Configure awareness portal → Show a sign-in page*). This simulates an employee logging in on an unexpected Wi-Fi page. When the form is submitted:
 
 1. The server reads the password field **only** to compute a single boolean (was it non-empty?), then **immediately discards** the value. It is never stored, logged, hashed, or transmitted.
 2. The participant is shown an ordinary **"You are connected"** confirmation. The page does **not** reveal that this was a simulation — the reveal is intentionally deferred to the debrief / manual report so employees cannot detect the test from the page itself.
@@ -249,7 +249,7 @@ Lab addressing is stored under `lab_network`:
 Portal sign-in options under `portal`:
 
 - require_login (show the sign-in page with a password field)
-- login_username_label / login_password_label / login_button_label
+- login_password_label / login_button_label (password-only page; `login_username_label` unused)
 
 ## Cleanup
 

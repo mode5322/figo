@@ -87,7 +87,6 @@ class AwarenessPortal:
                 ssid=ctx["ssid"],
                 title=ctx["title"],
                 organization=ctx["organization"],
-                username_label=ctx["username_label"],
                 password_label=ctx["password_label"],
                 button_label=ctx["button_label"],
             )

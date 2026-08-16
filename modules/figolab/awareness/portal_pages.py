@@ -88,18 +88,16 @@ def login_page(
     ssid: str,
     title: str,
     organization: str,
-    username_label: str = "Username / Email",
-    password_label: str = "Wi-Fi / Network password",
-    button_label: str = "Sign in",
+    username_label: str = "",  # kept for call-site compat; unused (password-only)
+    password_label: str = "Password",
+    button_label: str = "Connect",
 ) -> str:
-    """
-    A realistic-looking Wi-Fi/network sign-in page used only for the awareness
-    simulation. IMPORTANT: the form is posted to /login and the submitted
-    password is discarded immediately by the server — it is never stored,
-    logged, or transmitted anywhere. See portal_server.py do_POST.
-    """
-    org = f"<p class='muted'>{_e(organization)}</p>" if organization else ""
-    heading = _e(organization or title)
+    """Classic password-only captive-portal sign-in page. Form posts to /login."""
+    org_row = (
+        f"<tr><td class='lbl'>Organization:</td><td>{_e(organization)}</td></tr>"
+        if organization
+        else ""
+    )
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -107,52 +105,70 @@ def login_page(
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>{_e(title)}</title>
   <style>
-    :root {{
-      --bg:#0f1419; --card:#1a222c; --text:#e8eef5; --muted:#9aa7b5;
-      --accent:#3d8bfd; --line:#2b3642; --field:#111820;
-    }}
-    * {{ box-sizing:border-box; }}
     body {{
-      margin:0; min-height:100vh; display:grid; place-items:center;
-      font-family:"Segoe UI",system-ui,sans-serif;
-      background:radial-gradient(circle at top,#1c2733,var(--bg)); color:var(--text);
+      margin: 0;
+      background: #e8e8e8;
+      color: #000;
+      font-family: Tahoma, Verdana, sans-serif;
+      font-size: 13px;
     }}
-    .card {{
-      width:min(400px,92vw); background:var(--card); border:1px solid var(--line);
-      border-radius:14px; padding:28px 24px; box-shadow:0 20px 50px rgba(0,0,0,.35);
+    .wrap {{
+      width: 420px;
+      margin: 48px auto 0;
+      border: 1px solid #999;
+      background: #fff;
     }}
-    .brand {{ display:flex; align-items:center; gap:10px; margin-bottom:6px; }}
-    .brand .lock {{ color:#3dd68c; font-size:1.1rem; }}
-    h1 {{ margin:0; font-size:1.15rem; }}
-    .ssid {{
-      margin:14px 0 18px; padding:12px; text-align:center; font-weight:700;
-      border:1px dashed #3a4756; border-radius:10px; color:#f0b429;
+    .hd {{
+      background: #d4d0c8;
+      border-bottom: 1px solid #999;
+      padding: 8px 12px;
+      font-weight: bold;
+      font-size: 14px;
     }}
-    label {{ display:block; font-size:.85rem; color:var(--muted); margin:12px 0 6px; }}
-    input {{
-      width:100%; padding:11px 12px; border-radius:9px; border:1px solid var(--line);
-      background:var(--field); color:var(--text); font-size:1rem;
+    .bd {{ padding: 16px 14px 18px; }}
+    table {{ width: 100%; border-collapse: collapse; }}
+    td {{ padding: 6px 4px; vertical-align: middle; }}
+    td.lbl {{ width: 110px; color: #333; }}
+    input[type=password] {{
+      width: 100%;
+      box-sizing: border-box;
+      padding: 3px 4px;
+      border: 1px solid #7f9db9;
+      font-family: Tahoma, Verdana, sans-serif;
+      font-size: 13px;
     }}
-    button {{
-      width:100%; margin-top:18px; border:0; border-radius:10px; padding:12px 14px;
-      background:var(--accent); color:#fff; font-weight:600; font-size:1rem; cursor:pointer;
+    .actions {{ text-align: right; margin-top: 14px; }}
+    input[type=submit] {{
+      min-width: 88px;
+      padding: 3px 14px;
+      font-family: Tahoma, Verdana, sans-serif;
+      font-size: 13px;
+      border: 1px solid #003c74;
+      background: #ece9d8;
+      cursor: pointer;
     }}
-    .muted {{ color:var(--muted); font-size:.88rem; }}
+    .note {{ color: #555; margin: 0 0 12px; }}
   </style>
 </head>
 <body>
-  <div class="card">
-    <div class="brand"><span class="lock">&#128274;</span><h1>{heading}</h1></div>
-    {org}
-    <p class="muted">Sign in to access the network:</p>
-    <div class="ssid">{_e(ssid)}</div>
-    <form method="post" action="/login" autocomplete="off">
-      <label for="u">{_e(username_label)}</label>
-      <input id="u" name="username" autocomplete="off"/>
-      <label for="p">{_e(password_label)}</label>
-      <input id="p" name="password" type="password" autocomplete="off"/>
-      <button type="submit">{_e(button_label)}</button>
-    </form>
+  <div class="wrap">
+    <div class="hd">{_e(title)}</div>
+    <div class="bd">
+      <p class="note">Enter the network password to continue.</p>
+      <form method="post" action="/login" autocomplete="off">
+        <table>
+          {org_row}
+          <tr><td class="lbl">Network:</td><td><b>{_e(ssid)}</b></td></tr>
+          <tr>
+            <td class="lbl"><label for="p">{_e(password_label)}:</label></td>
+            <td><input id="p" name="password" type="password" autocomplete="off" autofocus/></td>
+          </tr>
+        </table>
+        <div class="actions">
+          <input type="submit" value="{_e(button_label)}"/>
+        </div>
+      </form>
+    </div>
   </div>
 </body>
 </html>
@@ -160,20 +176,9 @@ def login_page(
 
 
 def connected_page(*, ssid: str, title: str, organization: str) -> str:
-    """
-    Realistic captive-portal "you are connected" confirmation shown AFTER the
-    participant signs in.
-
-    It deliberately does NOT reveal that this was a security-awareness
-    simulation: the reveal happens later, during the debrief / manual report
-    (with screenshots from the live dashboard). The employee should only learn
-    it was a test from their security team, not from this page.
-
-    (Credential safety is unaffected: the submitted password was already
-    discarded server-side before this page is rendered.)
-    """
-    org = f"<p class='muted'>{_e(organization)}</p>" if organization else ""
-    net = f"<div class='ssid'>{_e(ssid)}</div>" if ssid else ""
+    """Classic captive-portal connected confirmation shown after sign-in."""
+    org = f"<p>Organization: {_e(organization)}</p>" if organization else ""
+    net = f"<p>Network: <b>{_e(ssid)}</b></p>" if ssid else ""
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -181,39 +186,41 @@ def connected_page(*, ssid: str, title: str, organization: str) -> str:
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>{_e(title)}</title>
   <style>
-    * {{ box-sizing:border-box; }}
     body {{
-      margin:0; min-height:100vh; display:grid; place-items:center;
-      font-family:"Segoe UI",system-ui,sans-serif;
-      background:radial-gradient(circle at top,#1c2733,#0f1419); color:#e8eef5;
+      margin: 0;
+      background: #e8e8e8;
+      color: #000;
+      font-family: Tahoma, Verdana, sans-serif;
+      font-size: 13px;
     }}
-    .card {{
-      width:min(400px,92vw); background:#1a222c; border:1px solid #2b3642;
-      border-radius:14px; padding:32px 24px; text-align:center;
-      box-shadow:0 20px 50px rgba(0,0,0,.35);
+    .wrap {{
+      width: 420px;
+      margin: 48px auto 0;
+      border: 1px solid #999;
+      background: #fff;
     }}
-    .check {{
-      width:64px; height:64px; margin:0 auto 14px; border-radius:50%;
-      background:#123524; display:grid; place-items:center;
-      color:#3dd68c; font-size:2rem; border:1px solid #1f5a3c;
+    .hd {{
+      background: #d4d0c8;
+      border-bottom: 1px solid #999;
+      padding: 8px 12px;
+      font-weight: bold;
+      font-size: 14px;
     }}
-    h1 {{ margin:0 0 6px; font-size:1.2rem; }}
-    p {{ line-height:1.5; }}
-    .muted {{ color:#9aa7b5; font-size:.92rem; }}
-    .ssid {{
-      margin:16px 0 4px; padding:12px; font-weight:700; color:#f0b429;
-      border:1px dashed #3a4756; border-radius:10px;
-    }}
+    .bd {{ padding: 18px 14px; }}
+    h1 {{ margin: 0 0 10px; font-size: 16px; font-weight: bold; }}
+    p {{ margin: 8px 0; line-height: 1.45; }}
   </style>
 </head>
 <body>
-  <div class="card">
-    <div class="check">&#10003;</div>
-    <h1>You are connected</h1>
-    {org}
-    <p class="muted">Your device now has network access.</p>
-    {net}
-    <p class="muted">You can return to your browser and continue.</p>
+  <div class="wrap">
+    <div class="hd">{_e(title)}</div>
+    <div class="bd">
+      <h1>You are connected</h1>
+      {org}
+      {net}
+      <p>Your device now has network access.</p>
+      <p>You can return to your browser and continue.</p>
+    </div>
   </div>
 </body>
 </html>
@@ -313,8 +320,8 @@ def render_context(config: Any) -> dict[str, Any]:
         "username_label": getattr(portal, "login_username_label", "Username / Email")
         if portal
         else "Username / Email",
-        "password_label": getattr(portal, "login_password_label", "Wi-Fi / Network password")
+        "password_label": getattr(portal, "login_password_label", "Password")
         if portal
-        else "Wi-Fi / Network password",
-        "button_label": getattr(portal, "login_button_label", "Sign in") if portal else "Sign in",
+        else "Password",
+        "button_label": getattr(portal, "login_button_label", "Connect") if portal else "Connect",
     }

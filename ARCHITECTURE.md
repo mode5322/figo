@@ -1,8 +1,8 @@
 # Figo — Architecture
 
-**Last updated:** 2026-08-15  
+**Last updated:** 2026-08-16  
 **Repo:** https://github.com/mode5322/Figo  
-**Branch reviewed:** `main` (fed03a6)  
+**Branch reviewed:** `cursor/classic-password-only-portal-e15f`  
 **Python LOC (app + tests):** ~4800+
 
 This file is the source of truth for how Figo is structured. Update it in the same change whenever code, menus, config, safety rules, or layout change.
@@ -31,7 +31,7 @@ Current product surface:
 | Security Awareness Lab | Implemented | Lab AP (`hostapd`+`dnsmasq`, open **or WPA2**) + captive portal + sign-in simulation + live behaviour log; **no real password collection** |
 | Blind (no on-screen reveal) | Working | Client sees a neutral sign-in then an ordinary "connected" page; the reveal is deferred to the debrief/manual report |
 | Captive portal auto pop-up | Working | Portal binds port 80 + `portal_port`; catch-all serves sign-in so OS captive assistant opens |
-| Sign-in simulation | Working | Realistic password page; value discarded on submit, only a boolean behaviour recorded |
+| Sign-in simulation | Working | Classic password-only page; value discarded on submit, only a boolean behaviour recorded |
 | Start-up hardening | Working | rfkill unblock, NM unmanage, stop `wpa_supplicant` on this iface, fail-fast AP-mode check |
 | Robust service startup | Working | hostapd/dnsmasq output captured; wait for `AP-ENABLED`; log tail shown on failure |
 | Live health + self-heal | Working | Dashboard shows AP/DHCP-DNS/Portal status + client list; portal auto-restarts on failure |
@@ -244,8 +244,8 @@ Evil Twin end-to-end.
     "session_ttl_sec": 3600,
     "require_login": true,
     "login_username_label": "Username / Email",
-    "login_password_label": "Wi-Fi / Network password",
-    "login_button_label": "Sign in"
+    "login_password_label": "Password",
+    "login_button_label": "Connect"
   },
   "lab_network": {
     "preset": "default",
@@ -364,7 +364,7 @@ Live dashboard events (non-sensitive): client connect/leave, portal open, sign-i
 
 **Captive portal:** the portal binds port 80 (OS captive-portal probes) plus `portal_port`, and its catch-all handler answers every request with the sign-in page, so the assistant opens automatically on clients. dnsmasq points all DNS at the gateway.
 
-**Sign-in simulation (blind):** when `portal.require_login` is true (default), the landing page is a neutral, realistic password form posting to `/login`. The handler reads the password field only to compute `entered_password` (a boolean) and discards the value immediately — it is never stored, logged, hashed, or transmitted. The client is then shown an ordinary "You are connected" page (`templates.connected_page`) that does **not** reveal the simulation. The reveal is deferred to the debrief/manual report, using the operator's live-dashboard screenshots and the configured `educational_message`. `templates.result_page` (which lists behaviours and the reveal) is retained for report/debrief use and is not served to clients.
+**Sign-in simulation (blind):** when `portal.require_login` is true (default), the landing page is a classic password-only form posting to `/login`. The handler reads the password field only to compute `entered_password` (a boolean) and discards the value immediately — it is never stored, logged, hashed, or transmitted. The client is then shown an ordinary "You are connected" page (`templates.connected_page`) that does **not** reveal the simulation. The reveal is deferred to the debrief/manual report, using the operator's live-dashboard screenshots and the configured `educational_message`. `templates.result_page` (which lists behaviours and the reveal) is retained for report/debrief use and is not served to clients.
 
 **AP security:** the lab AP defaults to open (`wpa=0`) but can be WPA2-PSK using an admin-set lab passphrase (the AP's own key, shared with participants — never a harvested credential) to avoid the client "insecure network" warning.
 

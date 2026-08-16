@@ -253,9 +253,9 @@ class PortalConfig:
     # Show a realistic sign-in page with a password field. The submitted value
     # is NEVER stored, logged, or transmitted — only the behaviour is recorded.
     require_login: bool = True
-    login_username_label: str = "Username / Email"
-    login_password_label: str = "Wi-Fi / Network password"
-    login_button_label: str = "Sign in"
+    login_username_label: str = "Username / Email"  # unused; password-only page
+    login_password_label: str = "Password"
+    login_button_label: str = "Connect"
 
     @classmethod
     def from_dict(cls, raw: Optional[dict[str, Any]]) -> "PortalConfig":
