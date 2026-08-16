@@ -204,11 +204,21 @@ Non-sensitive metrics only, for example:
 
 To realistically measure behaviour, the portal shows a **neutral sign-in page with a single optional password field** (no username; enable/disable via *Configure awareness portal → Show a sign-in page*). Empty submit is allowed. When the form is submitted:
 
-1. The server reads the password field **only** to compute a single boolean (was it non-empty?), then **immediately discards** the value. It is never stored, logged, hashed, or transmitted.
+1. The server reads the password field **only** to compute a single boolean (was it non-empty?) and, if verification is enabled, to compare it in memory (see below), then **immediately discards** the value. It is never stored, logged, or transmitted.
 2. The participant is shown an ordinary **"You are connected"** confirmation. The page does **not** reveal that this was a simulation — the reveal is intentionally deferred to the debrief / manual report so employees cannot detect the test from the page itself.
 3. The tool's live dashboard updates with the behaviour in real time (opened the page, submitted the form, typed a password). This is the operator's evidence for the report.
 
 If the sign-in page is disabled, the portal falls back to an explicit behavioural prompt (**“I would enter my password here”**) that never renders a password field. An optional admin-defined **fake training value** may also be configured; submitted input is compared in memory and **never written to logs or disk**.
+
+### Password verification (legal evidence, value never stored)
+
+To answer the objection *"maybe the employee only typed a decoy password"*, you can prove whether the submitted password equals the **real** network password — without ever storing or showing it:
+
+- In *Configure awareness portal* you may enable verification and enter the real network password once, in a **hidden** prompt. Figo stores only a **salted one-way PBKDF2 hash** in `config.json` — never the plaintext.
+- On each submission, the participant's password is compared **in memory** (constant-time) against that hash. Only the boolean result is kept: `matched = true/false`.
+- Reports, the terminal, and the live dashboard show **only** `true/false` counts (`passwords_verified`, `passwords_matched`) and a per-session `match=true/false/not-verified`. Neither the employee's password nor the stored hash ever appears in any report or log.
+
+This gives defensible evidence that the employee entered the genuine corporate credential (not a test value), while keeping the value itself completely private.
 
 ## Authorized Use
 
@@ -253,8 +263,10 @@ Portal sign-in options under `portal`:
 
 - require_login (show the sign-in page with a single optional password field)
 - login_password_label / login_button_label
+- verify_password (compare submissions against the real network password, true/false only)
+- verify_password_salt / verify_password_hash (salted one-way hash of the real password — never the plaintext)
 
-The sign-in page has **password only** (no username). The field is not required; empty submit is allowed. The value is never stored.
+The sign-in page has **password only** (no username). The field is not required; empty submit is allowed. The value is never stored. Official reports record whether the field was used (boolean) plus the configured educational message for debrief.
 
 ## Cleanup
 

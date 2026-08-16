@@ -256,6 +256,12 @@ class PortalConfig:
     login_username_label: str = "Username / Email"  # unused; kept for old configs
     login_password_label: str = "Wi-Fi / Network password"
     login_button_label: str = "Sign in"
+    # Optional evidence check: compare the submitted password against the real
+    # network password IN MEMORY and record only a true/false result. Only a
+    # salted one-way digest is stored here — never the plaintext password.
+    verify_password: bool = False
+    verify_password_salt: str = ""
+    verify_password_hash: str = ""
 
     @classmethod
     def from_dict(cls, raw: Optional[dict[str, Any]]) -> "PortalConfig":
@@ -287,6 +293,9 @@ class PortalConfig:
             login_button_label=str(
                 raw.get("login_button_label", cls.login_button_label) or cls.login_button_label
             ),
+            verify_password=bool(raw.get("verify_password", False)),
+            verify_password_salt=str(raw.get("verify_password_salt", "") or ""),
+            verify_password_hash=str(raw.get("verify_password_hash", "") or ""),
         )
 
     def to_dict(self) -> dict[str, Any]:

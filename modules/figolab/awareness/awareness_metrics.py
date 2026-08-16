@@ -25,6 +25,10 @@ class SessionMetrics:
     # True if the participant typed something into the (fake) password field.
     # The value itself is NEVER stored — only this boolean outcome.
     entered_password: bool = False
+    # Result of comparing the submitted password against the real network
+    # password: True (matched), False (did not match), or None (not verified).
+    # Only this outcome is stored — never either password value.
+    password_matched: Optional[bool] = None
     security_prompt_interaction: bool = False
     training_action: bool = False
     completed: bool = False
@@ -70,6 +74,10 @@ class MetricsStore:
         self.interactions: int = 0
         self.login_submissions: int = 0
         self.passwords_entered: int = 0
+        # Evidence counters: how many submissions were verified against the real
+        # network password, and of those how many matched. Values never stored.
+        self.passwords_verified: int = 0
+        self.passwords_matched: int = 0
         self.completed: int = 0
         self.started_at: float = time.time()
         self._events: list[dict[str, str]] = []
@@ -119,13 +127,19 @@ class MetricsStore:
                 self.add_event("login", f"Viewed sign-in page · session {session_id[:8]}")
             return m
 
-    def mark_login_submitted(self, session_id: str, entered_password: bool) -> SessionMetrics:
+    def mark_login_submitted(
+        self,
+        session_id: str,
+        entered_password: bool,
+        matched: Optional[bool] = None,
+    ) -> SessionMetrics:
         """
         Record that the participant submitted the sign-in form.
 
         `entered_password` is a boolean only: whether the (fake) password field
-        was non-empty. The submitted value is never received here and is never
-        stored anywhere.
+        was non-empty. `matched` is the true/false result of comparing the
+        submitted password against the real network password (or None when
+        verification is off). No password value is ever received or stored here.
         """
         with self._lock:
             m = self.ensure(session_id)
@@ -148,6 +162,22 @@ class MetricsStore:
                     "login",
                     f"Submitted sign-in without a password · {session_id[:8]}",
                 )
+            if matched is not None and m.password_matched is None:
+                m.password_matched = bool(matched)
+                self.passwords_verified += 1
+                if matched:
+                    self.passwords_matched += 1
+                    self.add_event(
+                        "risk",
+                        "Submitted password MATCHED the real network password "
+                        f"(value NOT stored) · {session_id[:8]}",
+                    )
+                else:
+                    self.add_event(
+                        "login",
+                        "Submitted password did not match the real network password "
+                        f"· {session_id[:8]}",
+                    )
             return m
 
     def mark_interaction(self, session_id: str) -> SessionMetrics:
@@ -200,6 +230,8 @@ class MetricsStore:
                 "interactions": self.interactions,
                 "login_submissions": self.login_submissions,
                 "passwords_entered": self.passwords_entered,
+                "passwords_verified": self.passwords_verified,
+                "passwords_matched": self.passwords_matched,
                 "completed": self.completed,
                 "runtime_sec": int(time.time() - self.started_at),
                 "sessions": [m.to_dict() for m in self._by_session.values()],
@@ -221,6 +253,8 @@ class MetricsStore:
             self.interactions = 0
             self.login_submissions = 0
             self.passwords_entered = 0
+            self.passwords_verified = 0
+            self.passwords_matched = 0
             self.completed = 0
             self.started_at = time.time()
             self._events.clear()

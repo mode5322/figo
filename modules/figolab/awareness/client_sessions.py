@@ -22,6 +22,7 @@ class ClientSession:
     viewed_login: bool = False
     submitted_login: bool = False
     entered_password: bool = False
+    password_matched: Optional[bool] = None
     security_prompt_interaction: bool = False
     training_action: bool = False
     completed: bool = False

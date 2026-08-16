@@ -482,10 +482,13 @@ def build_session_report(session: LabSession) -> tuple[dict, str]:
                 "viewed_login": bool(item.get("viewed_login")),
                 "submitted_login": bool(item.get("submitted_login")),
                 "entered_password": bool(item.get("entered_password")),
+                "password_matched": item.get("password_matched"),
                 "completed": bool(item.get("completed")),
             }
         )
     passwords_entered = int(snap.get("passwords_entered", 0) or 0)
+    passwords_verified = int(snap.get("passwords_verified", 0) or 0)
+    passwords_matched = int(snap.get("passwords_matched", 0) or 0)
     report = {
         "generated_at": utc_now_iso(),
         "runtime_sec": session.runtime_sec(),
@@ -507,12 +510,15 @@ def build_session_report(session: LabSession) -> tuple[dict, str]:
             "sign_in_page": "password_only" if portal.require_login else "prompt_only",
             "password_field_required": False,
             "password_field_label": portal.login_password_label or "",
+            "password_verification": "enabled" if portal.verify_password else "disabled",
         },
         "metrics": {
             "connected_devices": snap["connected_devices"],
             "portal_visits": snap["portal_visits"],
             "login_submissions": snap["login_submissions"],
             "passwords_entered": passwords_entered,
+            "passwords_verified": passwords_verified,
+            "passwords_matched": passwords_matched,
             "interactions": snap["interactions"],
             "completed": snap["completed"],
         },
@@ -525,6 +531,7 @@ def build_session_report(session: LabSession) -> tuple[dict, str]:
     assert_no_sensitive_payload(report["metrics"])
     for row in findings:
         assert_no_sensitive_payload(row)
+    assert_no_sensitive_payload(report["portal"])
 
     m = report["metrics"]
     lines = [
@@ -551,6 +558,8 @@ def build_session_report(session: LabSession) -> tuple[dict, str]:
         f"Portal visits      : {m['portal_visits']}",
         f"Sign-in submissions: {m['login_submissions']}",
         f"Passwords entered  : {m['passwords_entered']}   (boolean only — values never stored)",
+        f"Password verified  : {m['passwords_verified']} submission(s) checked against the real network password",
+        f"Password MATCHED   : {m['passwords_matched']}   (typed the real network password — value never stored)",
         f"Interactions       : {m['interactions']}",
         f"Completed          : {m['completed']}",
         "",
@@ -560,9 +569,15 @@ def build_session_report(session: LabSession) -> tuple[dict, str]:
     if findings:
         for row in findings:
             pwd = "YES — typed into password field" if row["entered_password"] else "no"
+            if row["password_matched"] is True:
+                match = "  match=REAL-NETWORK-PASSWORD (true)"
+            elif row["password_matched"] is False:
+                match = "  match=not-real-password (false)"
+            else:
+                match = "  match=not-verified"
             lines.append(
                 f"  {row['session_id']:<12}  viewed={row['viewed_login']}  "
-                f"submitted={row['submitted_login']}  password_entered={pwd}"
+                f"submitted={row['submitted_login']}  password_entered={pwd}{match}"
             )
     else:
         lines.append("  (no portal sessions recorded)")
@@ -575,6 +590,27 @@ def build_session_report(session: LabSession) -> tuple[dict, str]:
             f"{passwords_entered} participant(s) typed into the unexpected Wi-Fi",
             "password field. In a real attack that credential could have been stolen.",
             "Figo did NOT store, log, hash, or transmit any password value.",
+        ]
+
+    if passwords_matched:
+        lines += [
+            "",
+            "⚠ EVIDENCE: REAL NETWORK PASSWORD ENTERED",
+            "-" * 48,
+            f"{passwords_matched} submission(s) were verified to EQUAL the organization's",
+            "real Wi-Fi password. This is confirmed by an in-memory constant-time",
+            "comparison against a salted one-way hash of the known network password.",
+            "It proves the participant typed the genuine credential (not a decoy).",
+            "The password value itself was never stored, printed, logged, or transmitted.",
+        ]
+    elif passwords_verified:
+        lines += [
+            "",
+            "EVIDENCE: PASSWORD VERIFICATION RESULT",
+            "-" * 48,
+            f"{passwords_verified} submission(s) were checked against the real network",
+            "password; none matched. The participant did not enter the genuine",
+            "credential. No password value was stored at any point.",
         ]
 
     edu = (report["portal"]["educational_message"] or "").strip()
@@ -612,9 +648,19 @@ def build_official_report_html(report: dict) -> str:
         f"Password field used: {metrics.get('passwords_entered', 0)} "
         "(values never stored)",
     ]
+    if metrics.get("passwords_verified", 0):
+        behaviors.append(
+            f"Verified against real network password: "
+            f"{metrics.get('passwords_matched', 0)} matched of "
+            f"{metrics.get('passwords_verified', 0)} checked (true/false only)"
+        )
     for row in findings:
         sid = row.get("session_id", "?")
-        if row.get("entered_password"):
+        if row.get("password_matched") is True:
+            behaviors.append(
+                f"Session {sid}: entered the REAL network password (verified true/false only)"
+            )
+        elif row.get("entered_password"):
             behaviors.append(f"Session {sid}: typed into the password field")
         elif row.get("submitted_login"):
             behaviors.append(f"Session {sid}: submitted sign-in without a password")

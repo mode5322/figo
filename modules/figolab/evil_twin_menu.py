@@ -148,6 +148,10 @@ def _configure_portal(settings: Any, api: Any) -> None:
             or portal.login_button_label
         )
 
+    verify_password, verify_salt, verify_hash = _configure_password_verification(
+        portal, require_login, api
+    )
+
     settings.portal = PortalConfig(
         enabled=enabled,
         organization=organization.strip(),
@@ -162,6 +166,9 @@ def _configure_portal(settings: Any, api: Any) -> None:
         login_username_label=portal.login_username_label,
         login_password_label=password_label.strip(),
         login_button_label=button_label.strip(),
+        verify_password=verify_password,
+        verify_password_salt=verify_salt,
+        verify_password_hash=verify_hash,
     )
     try:
         api.save_settings(settings)
@@ -170,7 +177,74 @@ def _configure_portal(settings: Any, api: Any) -> None:
         return
     console.print("\n[green]Portal configuration saved.[/green]")
     console.print("[dim]Real passwords are never collected or stored.[/dim]")
+    if verify_password:
+        console.print(
+            "[dim]Password verification is ON: submissions are compared in memory "
+            "and reports show only true/false.[/dim]"
+        )
     api.pause()
+
+
+def _configure_password_verification(
+    portal: PortalConfig, require_login: bool, api: Any
+) -> tuple[bool, str, str]:
+    """
+    Optionally set a one-way check that proves whether a submitted password
+    equals the real network password — as legal evidence — without ever storing
+    the value. Returns ``(enabled, salt_hex, digest_hex)``.
+    """
+    keep = (
+        bool(getattr(portal, "verify_password", False)),
+        str(getattr(portal, "verify_password_salt", "") or ""),
+        str(getattr(portal, "verify_password_hash", "") or ""),
+    )
+    if not require_login:
+        return (False, "", "")
+
+    console.print(
+        Panel(
+            "Optional evidence check.\n"
+            "Compare the employee's submitted password against the REAL network\n"
+            "password, in memory only. Reports and the terminal show just\n"
+            "true/false — the password itself is never stored, printed, or logged.\n"
+            "Only a salted one-way hash of the real password is saved to config.",
+            title="Verify submitted password (legal evidence)",
+            border_style="yellow",
+            box=box.ROUNDED,
+        )
+    )
+    already = keep[0] and keep[2]
+    prompt = (
+        "Verification is currently ON. Reconfigure it?"
+        if already
+        else "Enable password verification against the real network password?"
+    )
+    if not api.confirm(prompt, default=already):
+        if already and not api.confirm("Keep the existing verification?", default=True):
+            return (False, "", "")
+        return keep
+
+    import getpass
+
+    try:
+        first = getpass.getpass("Real network password (hidden, not stored): ")
+        second = getpass.getpass("Re-enter to confirm: ")
+    except (EOFError, KeyboardInterrupt):
+        console.print("[yellow]Verification unchanged.[/yellow]")
+        return keep
+    if not first:
+        console.print("[yellow]Empty password — verification left unchanged.[/yellow]")
+        return keep
+    if first != second:
+        console.print("[red]Passwords did not match — verification left unchanged.[/red]")
+        return keep
+
+    from modules.figolab.password_check import hash_password
+
+    salt_hex, digest_hex = hash_password(first)
+    first = second = None  # explicit discard of plaintext
+    console.print("[green]Verification set. Only the one-way hash is stored.[/green]")
+    return (True, salt_hex, digest_hex)
 
 
 def _lab_network_from_settings(settings: Any) -> dict[str, str]:
@@ -634,6 +708,8 @@ def _maybe_save_report(report, api: Any) -> None:
             f"Connected devices  : {metrics.get('connected_devices', 0)}\n"
             f"Sign-in submissions: {metrics.get('login_submissions', 0)}\n"
             f"Passwords entered  : {metrics.get('passwords_entered', 0)}\n"
+            f"Password verified  : {metrics.get('passwords_verified', 0)} checked\n"
+            f"Password MATCHED   : {metrics.get('passwords_matched', 0)} (real network password; value never stored)\n"
             f"Completed          : {metrics.get('completed', 0)}",
             title="Session summary (for report)",
             border_style="cyan",
@@ -696,7 +772,13 @@ def _dashboard_renderable(session) -> Panel:
         f"Portal visits      : {snap['portal_visits']}\n"
         f"Sign-in submissions: {snap['login_submissions']}\n"
         f"[red]Passwords entered  : {snap['passwords_entered']}[/red]\n"
-        f"Interactions       : {snap['interactions']}\n"
+        + (
+            f"[red]Password MATCHED   : {snap.get('passwords_matched', 0)} / "
+            f"{snap.get('passwords_verified', 0)} verified[/red]\n"
+            if snap.get("passwords_verified", 0)
+            else ""
+        )
+        + f"Interactions       : {snap['interactions']}\n"
         f"Completed          : {snap['completed']}\n"
         f"{'─' * 42}\n"
         f"[dim]Connected clients (ip · mac · host)[/dim]\n"

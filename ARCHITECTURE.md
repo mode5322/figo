@@ -32,10 +32,11 @@ Current product surface:
 | Blind (no on-screen reveal) | Working | Client sees a neutral sign-in then an ordinary "connected" page; the reveal is deferred to the debrief/manual report |
 | Captive portal auto pop-up | Working | Portal binds port 80 + `portal_port`; catch-all serves sign-in so OS captive assistant opens |
 | Sign-in simulation | Working | Password-only optional field; value discarded on submit, only a boolean behaviour recorded |
+| Password verification | Working | Optional in-memory compare vs real network password (salted PBKDF2 hash in config); reports show only true/false, never the value or hash |
 | Start-up hardening | Working | rfkill unblock, NM unmanage, stop `wpa_supplicant` on this iface, fail-fast AP-mode check |
 | Robust service startup | Working | hostapd/dnsmasq output captured; wait for `AP-ENABLED`; log tail shown on failure |
 | Live health + self-heal | Working | Dashboard shows AP/DHCP-DNS/Portal status + client list; portal auto-restarts on failure |
-| Session report | Working | On stop, save JSON + text report (no secrets, no AP passphrase) to `~/figo-reports/` |
+| Session report | Working | On stop, save official JSON + text + HTML report (password-field findings, educational message; no secrets / no AP passphrase) to `~/figo-reports/` |
 | Lab network options | Working | Gateway/DHCP presets, custom prefix/port/SSID, **AP security (open/WPA2)** |
 | Dry-run lab setup | Working | Shows hostapd/dnsmasq configs without starting AP |
 | Error handling in menus | Working | EOF/Ctrl+C, empty input, unexpected exceptions shown as panels |
@@ -118,6 +119,7 @@ Figo/
 │       ├── ap_configs.py         # hostapd/dnsmasq config builders + lease parsing
 │       ├── wireless_interface.py # snapshot/restore NM + iface, AP-mode prep
 │       ├── process_tracker.py    # tracked Popen children
+│       ├── password_check.py     # salted one-way hash + in-memory verify
 │       ├── lab_config.py         # LabConfig / PortalConfig models + validation
 │       └── awareness/
 │           ├── portal_server.py     # ThreadingHTTPServer captive portal
@@ -170,6 +172,7 @@ Figo/
 | `ap_configs.py` | Write hostapd (open **or WPA2-PSK**) + dnsmasq configs; `parse_dhcp_leases()` client records |
 | `wireless_interface.py` | Snapshot operstate/mode/addrs/NM; restore after lab; `rfkill_unblock()`, `stop_interfering_processes()` |
 | `process_tracker.py` | Track only Figo-started children; SIGTERM then kill |
+| `password_check.py` | PBKDF2 salted hash + constant-time verify for optional password-match evidence; never handles plaintext beyond the call |
 | `awareness/portal_server.py` | Local HTTP portal; binds port 80 + `portal_port`; catch-all serves sign-in; `/login` discards password value, records boolean behaviour only |
 | `awareness/client_sessions.py` | UUID-like `secrets.token_urlsafe` sessions with TTL |
 | `awareness/awareness_metrics.py` | In-memory counters (incl. `login_submissions`, `passwords_entered`); refuse sensitive keys |
@@ -244,7 +247,10 @@ Evil Twin end-to-end.
     "session_ttl_sec": 3600,
     "require_login": true,
     "login_password_label": "Wi-Fi / Network password",
-    "login_button_label": "Sign in"
+    "login_button_label": "Sign in",
+    "verify_password": false,
+    "verify_password_salt": "",
+    "verify_password_hash": ""
   },
   "lab_network": {
     "preset": "default",
@@ -366,6 +372,8 @@ Live dashboard events (non-sensitive): client connect/leave, portal open, sign-i
 **Sign-in simulation (blind):** when `portal.require_login` is true (default), the landing page is a neutral password-only form (no username; field is optional / not HTML-required) posting to `/login`. The handler reads the password field only to compute `entered_password` (a boolean) and discards the value immediately — it is never stored, logged, hashed, or transmitted. The client is then shown an ordinary "You are connected" page (`templates.connected_page`) that does **not** reveal the simulation. The reveal is deferred to the debrief/manual report, using the operator's live-dashboard screenshots and the configured `educational_message`. `templates.result_page` (which lists behaviours and the reveal) is retained for report/debrief use and is not served to clients.
 
 **AP security:** the lab AP defaults to open (`wpa=0`) but can be WPA2-PSK using an admin-set lab passphrase (the AP's own key, shared with participants — never a harvested credential) to avoid the client "insecure network" warning.
+
+**Password verification (evidence, no storage):** `modules/figolab/password_check.py` derives a salted PBKDF2-HMAC-SHA256 digest of the *real* network password (entered once via a hidden prompt); only the salt + digest are saved to `portal.verify_password_salt` / `verify_password_hash`. On `/login`, `AwarenessPortal._verify_submitted_password()` compares the submitted value in memory (constant-time) and returns True/False/None. `mark_login_submitted(..., matched)` records only the boolean (`password_matched`) and counters (`passwords_verified`, `passwords_matched`). No plaintext or digest is ever written to reports, logs, or the terminal — reports include only `password_verification: enabled/disabled` and true/false results.
 
 `192.168.1.1` may conflict with real home routers; `10.66.66.1` remains the recommended default.
 

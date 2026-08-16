@@ -54,6 +54,27 @@ class AwarenessPortal:
             return False
         return any(t.is_alive() for t in self._threads) if self._threads else False
 
+    def _verify_submitted_password(self, password: Optional[str]) -> Optional[bool]:
+        """
+        Compare a submitted password against the real network password in memory.
+
+        Returns True/False when verification is configured and a password was
+        provided, else None. The submitted value and the stored digest are never
+        logged, printed, or persisted — only the boolean result leaves this call.
+        """
+        portal_cfg = getattr(self.config, "portal", None)
+        if portal_cfg is None or not getattr(portal_cfg, "verify_password", False):
+            return None
+        digest = getattr(portal_cfg, "verify_password_hash", "")
+        salt = getattr(portal_cfg, "verify_password_salt", "")
+        if not digest or not salt:
+            return None
+        if not (password or "").strip():
+            return False
+        from modules.figolab.password_check import verify_password
+
+        return verify_password(password, salt, digest)
+
     @property
     def url(self) -> str:
         host = self.config.gateway_ip or "127.0.0.1"
@@ -164,15 +185,22 @@ class AwarenessPortal:
                 form = parse_qs(raw.decode("utf-8", errors="replace"), keep_blank_values=True)
 
                 if path.startswith("/login"):
-                    # Read the password field ONLY to compute a boolean, then drop it.
+                    # Read the password field ONLY to (a) compute a boolean and
+                    # (b) compare it in memory against the real network password.
+                    # The value itself is dropped immediately — never stored.
                     password = form.get("password", [""])[0]
                     entered_password = bool((password or "").strip())
+                    matched = portal._verify_submitted_password(password)
                     password = None  # noqa: F841 — explicit discard
                     form.pop("password", None)
                     form.pop("username", None)
-                    portal.metrics.mark_login_submitted(session.session_id, entered_password)
+                    portal.metrics.mark_login_submitted(
+                        session.session_id, entered_password, matched
+                    )
                     session.submitted_login = True
                     session.entered_password = entered_password
+                    if matched is not None:
+                        session.password_matched = matched
                     session.security_prompt_interaction = True
                     portal.metrics.mark_completed(session.session_id)
                     session.completed = True
