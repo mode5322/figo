@@ -31,7 +31,7 @@ Current product surface:
 | Security Awareness Lab | Implemented | Lab AP (`hostapd`+`dnsmasq`, open **or WPA2**) + captive portal + sign-in simulation + live behaviour log; **no real password collection** |
 | Blind (no on-screen reveal) | Working | Client sees a neutral sign-in then an ordinary "connected" page; the reveal is deferred to the debrief/manual report |
 | Captive portal auto pop-up | Working | Portal binds port 80 + `portal_port`; catch-all serves sign-in so OS captive assistant opens |
-| Sign-in simulation | Working | Classic password-only page; value discarded on submit, only a boolean behaviour recorded |
+| Sign-in simulation | Working | Responsive classic page; `admin` + password field only; value discarded on submit |
 | Start-up hardening | Working | rfkill unblock, NM unmanage, stop `wpa_supplicant` on this iface, fail-fast AP-mode check |
 | Robust service startup | Working | hostapd/dnsmasq output captured; wait for `AP-ENABLED`; log tail shown on failure |
 | Live health + self-heal | Working | Dashboard shows AP/DHCP-DNS/Portal status + client list; portal auto-restarts on failure |

