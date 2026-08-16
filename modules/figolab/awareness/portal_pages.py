@@ -88,15 +88,15 @@ def login_page(
     ssid: str,
     title: str,
     organization: str,
-    username_label: str = "Username / Email",
     password_label: str = "Wi-Fi / Network password",
     button_label: str = "Sign in",
 ) -> str:
     """
     A realistic-looking Wi-Fi/network sign-in page used only for the awareness
-    simulation. IMPORTANT: the form is posted to /login and the submitted
-    password is discarded immediately by the server — it is never stored,
-    logged, or transmitted anywhere. See portal_server.py do_POST.
+    simulation. Shows a single optional password field (no username, no HTML
+    ``required`` attributes). The submitted password is discarded immediately
+    by the server — it is never stored, logged, or transmitted anywhere.
+    See portal_server.py do_POST.
     """
     org = f"<p class='muted'>{_e(organization)}</p>" if organization else ""
     heading = _e(organization or title)
@@ -144,11 +144,9 @@ def login_page(
   <div class="card">
     <div class="brand"><span class="lock">&#128274;</span><h1>{heading}</h1></div>
     {org}
-    <p class="muted">Sign in to access the network:</p>
+    <p class="muted">Enter the network password to continue:</p>
     <div class="ssid">{_e(ssid)}</div>
-    <form method="post" action="/login" autocomplete="off">
-      <label for="u">{_e(username_label)}</label>
-      <input id="u" name="username" autocomplete="off"/>
+    <form method="post" action="/login" autocomplete="off" novalidate>
       <label for="p">{_e(password_label)}</label>
       <input id="p" name="password" type="password" autocomplete="off"/>
       <button type="submit">{_e(button_label)}</button>
@@ -310,9 +308,6 @@ def render_context(config: Any) -> dict[str, Any]:
         "contact": getattr(portal, "security_contact", "") if portal else "",
         "educational_message": getattr(portal, "educational_message", "") if portal else "",
         "require_login": bool(getattr(portal, "require_login", True)) if portal else True,
-        "username_label": getattr(portal, "login_username_label", "Username / Email")
-        if portal
-        else "Username / Email",
         "password_label": getattr(portal, "login_password_label", "Wi-Fi / Network password")
         if portal
         else "Wi-Fi / Network password",

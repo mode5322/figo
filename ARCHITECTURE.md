@@ -243,7 +243,6 @@ Evil Twin end-to-end.
     "logo_path": "",
     "session_ttl_sec": 3600,
     "require_login": true,
-    "login_username_label": "Username / Email",
     "login_password_label": "Wi-Fi / Network password",
     "login_button_label": "Sign in"
   },

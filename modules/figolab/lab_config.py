@@ -250,10 +250,10 @@ class PortalConfig:
     training_value: str = ""
     logo_path: str = ""
     session_ttl_sec: int = 3600
-    # Show a realistic sign-in page with a password field. The submitted value
-    # is NEVER stored, logged, or transmitted — only the behaviour is recorded.
+    # Show a sign-in page with a single optional password field (no username).
+    # The submitted value is NEVER stored, logged, or transmitted — only the behaviour is recorded.
     require_login: bool = True
-    login_username_label: str = "Username / Email"
+    login_username_label: str = "Username / Email"  # unused; kept for old configs
     login_password_label: str = "Wi-Fi / Network password"
     login_button_label: str = "Sign in"
 

@@ -248,8 +248,10 @@ Lab addressing is stored under `lab_network`:
 
 Portal sign-in options under `portal`:
 
-- require_login (show the sign-in page with a password field)
-- login_username_label / login_password_label / login_button_label
+- require_login (show the sign-in page with a single optional password field)
+- login_password_label / login_button_label
+
+The sign-in page has **password only** (no username). The field is not required; empty submit is allowed. The value is never stored.
 
 ## Cleanup
 

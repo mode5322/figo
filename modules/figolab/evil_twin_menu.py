@@ -136,16 +136,11 @@ def _configure_portal(settings: Any, api: Any) -> None:
         "Show a sign-in page with a password field? (value is never stored)",
         default=portal.require_login,
     )
-    username_label = portal.login_username_label
     password_label = portal.login_password_label
     button_label = portal.login_button_label
     if require_login:
-        username_label = (
-            api.ask("Sign-in username label", default=portal.login_username_label)
-            or portal.login_username_label
-        )
         password_label = (
-            api.ask("Sign-in password label", default=portal.login_password_label)
+            api.ask("Password field label", default=portal.login_password_label)
             or portal.login_password_label
         )
         button_label = (
@@ -164,7 +159,7 @@ def _configure_portal(settings: Any, api: Any) -> None:
         logo_path=logo.strip(),
         session_ttl_sec=portal.session_ttl_sec,
         require_login=require_login,
-        login_username_label=username_label.strip(),
+        login_username_label=portal.login_username_label,
         login_password_label=password_label.strip(),
         login_button_label=button_label.strip(),
     )
