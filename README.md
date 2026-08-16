@@ -109,13 +109,18 @@ Inside the app, menu **5 — Check / install tools** can install missing package
 
 ## Evil Twin Lab
 
-Menu **8** opens:
+Menu **8** opens (Setup/Requirements first, then Run):
 
-1. **Security Awareness Lab** — controlled lab AP + local sign-in portal  
-2. Configure awareness portal  
-3. Configure lab network (gateway / DHCP / prefix / port / SSID / security)  
+Setup / Requirements:
+
+1. Configure awareness portal  
+2. Configure lab network (gateway / DHCP / prefix / port / SSID / security)  
+3. Adapter / preflight check  
+
+Run:
+
 4. Dry-run lab setup (show configs, no AP)  
-5. Adapter / preflight check  
+5. **Security Awareness Lab** — controlled lab AP + local sign-in portal  
 0. Back  
 
 Lab network choices:

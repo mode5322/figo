@@ -199,16 +199,21 @@ Empty Enter → ignored (no “unknown option”)
 Evil Twin submenu (8):
 
 ```text
-  1  Security Awareness Lab (open/WPA2 AP + captive sign-in portal)
-  2  Configure awareness portal
-  3  Configure lab network (gateway / DHCP / prefix / port / SSID / security)
+  Setup / Requirements
+  1  Configure awareness portal
+  2  Configure lab network (gateway / DHCP / prefix / port / SSID / security)
+  3  Adapter / preflight check
+  ------------------------
+  Run
   4  Dry-run lab setup (show configs, no AP)
-  5  Adapter / preflight check
+  5  Security Awareness Lab (open/WPA2 AP + captive sign-in portal)
   0  Back
 ```
 
-The standalone "Wi-Fi Lab" (AP without a portal) was removed: the lab now always
-runs the awareness scenario so it matches a real Evil Twin end-to-end.
+Setup/requirement options come first (mirroring the main menu), then the
+executable options. The standalone "Wi-Fi Lab" (AP without a portal) was
+removed: the lab now always runs the awareness scenario so it matches a real
+Evil Twin end-to-end.
 
 ---
 
@@ -311,11 +316,14 @@ GPU alerts show PCI adapters, `nvidia-smi` rows when available, and hashcat back
 Submenu:
 
 ```text
-  1  Security Awareness Lab
-  2  Configure awareness portal (incl. sign-in page toggle)
-  3  Configure lab network (gateway / DHCP / port / SSID / security)
+  Setup / Requirements
+  1  Configure awareness portal (incl. sign-in page toggle)
+  2  Configure lab network (gateway / DHCP / port / SSID / security)
+  3  Adapter / preflight check
+  ------------------------
+  Run
   4  Dry-run lab setup
-  5  Adapter / preflight check
+  5  Security Awareness Lab
   0  Back
 ```
 

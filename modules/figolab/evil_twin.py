@@ -50,11 +50,14 @@ def action_evil_twin_lab(settings: Any, api: Any) -> None:
             table = Table(show_header=False, box=box.SIMPLE, expand=True, padding=(0, 1))
             table.add_column("key", style="bold yellow", width=4)
             table.add_column("label")
-            table.add_row("1", "Security Awareness Lab")
-            table.add_row("2", "Configure awareness portal")
-            table.add_row("3", "Configure lab network (gateway / DHCP / port / SSID / security)")
+            table.add_row("", "[bold]Setup / Requirements[/bold]")
+            table.add_row("1", "Configure awareness portal")
+            table.add_row("2", "Configure lab network (gateway / DHCP / port / SSID / security)")
+            table.add_row("3", "Adapter / preflight check")
+            table.add_row("--", "[bold][red]------------------------[/red][/bold]")
+            table.add_row("", "[bold]Run[/bold]")
             table.add_row("4", "Dry-run lab setup (show configs, no AP)")
-            table.add_row("5", "Adapter / preflight check")
+            table.add_row("5", "Security Awareness Lab")
             table.add_row("0", "Back")
             console.print(
                 Panel(
@@ -70,19 +73,19 @@ def action_evil_twin_lab(settings: Any, api: Any) -> None:
                 return
             if choice == "1":
                 if run:
-                    run("Security Awareness Lab", _run_lab_flow, settings, api, mode="awareness")
-                else:
-                    _run_lab_flow(settings, api, mode="awareness")
-            elif choice == "2":
-                if run:
                     run("Configure awareness portal", _configure_portal, settings, api)
                 else:
                     _configure_portal(settings, api)
-            elif choice == "3":
+            elif choice == "2":
                 if run:
                     run("Configure lab network", _configure_lab_network, settings, api)
                 else:
                     _configure_lab_network(settings, api)
+            elif choice == "3":
+                if run:
+                    run("Adapter / preflight check", _show_preflight, settings, api)
+                else:
+                    _show_preflight(settings, api)
             elif choice == "4":
                 if run:
                     run("Dry-run lab setup", _dry_run_lab, settings, api)
@@ -90,9 +93,9 @@ def action_evil_twin_lab(settings: Any, api: Any) -> None:
                     _dry_run_lab(settings, api)
             elif choice == "5":
                 if run:
-                    run("Adapter / preflight check", _show_preflight, settings, api)
+                    run("Security Awareness Lab", _run_lab_flow, settings, api, mode="awareness")
                 else:
-                    _show_preflight(settings, api)
+                    _run_lab_flow(settings, api, mode="awareness")
             else:
                 api.warn_and_back("Unknown option", "Enter 0–5.")
         except BackToMenu:
@@ -258,7 +261,7 @@ def _prompt_ap_security(api: Any, current: dict[str, str]) -> Optional[dict[str,
 
 
 def _configure_lab_network(settings: Any, api: Any) -> None:
-    """Menu 8 → 4: choose default / home-style / custom gateway+DHCP+port+SSID + security."""
+    """Menu 8 → 2: choose default / home-style / custom gateway+DHCP+port+SSID + security."""
     api.clear_screen()
     current = _lab_network_from_settings(settings)
     cur_sec = "WPA2" if str(current.get("ap_security", "open")).lower() == "wpa2" else "open"
