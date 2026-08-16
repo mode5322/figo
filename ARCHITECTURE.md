@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-08-16  
 **Repo:** https://github.com/mode5322/Figo  
-**Branch reviewed:** `cursor/cleanup-unused-portal-code-e15f`  
+**Branch reviewed:** `cursor/responsive-admin-portal-e15f`  
 **Python LOC (app + tests):** ~4800+
 
 This file is the source of truth for how Figo is structured. Update it in the same change whenever code, menus, config, safety rules, or layout change.
