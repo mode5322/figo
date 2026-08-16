@@ -230,9 +230,6 @@ Existing fields remain backward compatible. Portal settings are stored under the
 - portal title
 - training message
 - security contact
-- educational message
-- optional fake training value
-- optional logo path
 
 Lab addressing is stored under `lab_network`:
 
@@ -249,7 +246,7 @@ Lab addressing is stored under `lab_network`:
 Portal sign-in options under `portal`:
 
 - require_login (show the sign-in page with a password field)
-- login_password_label / login_button_label (password-only page; `login_username_label` unused)
+- login_password_label / login_button_label
 
 ## Cleanup
 

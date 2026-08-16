@@ -228,32 +228,16 @@ def validate_ap_passphrase(passphrase: str) -> tuple[bool, str]:
 class PortalConfig:
     enabled: bool = True
     organization: str = ""
-    # Client-facing title. Kept neutral on purpose so the sign-in page looks
-    # like a real network portal — the participant should not realise it is a
-    # simulation until the debrief / manual report.
     portal_title: str = "Wi-Fi Authentication"
-    training_message: str = (
-        "Please sign in with your network account to continue."
-    )
+    training_message: str = "Please sign in with your network account to continue."
     security_contact: str = ""
-    educational_message: str = (
-        "This was a controlled security-awareness simulation.\n"
-        "The Wi-Fi network you connected to was part of an authorized security assessment.\n\n"
-        "Important warning signs include:\n"
-        "• Unexpected duplicate Wi-Fi networks\n"
-        "• Suspicious login pages\n"
-        "• Unexpected requests for credentials\n"
-        "• Unusual network behavior\n\n"
-        "Never enter your real password into an unexpected Wi-Fi authentication page.\n"
-        "If you encounter a suspicious network, disconnect and contact your IT/security team."
-    )
+    # Kept for older config.json files; not shown on client pages.
+    educational_message: str = ""
     training_value: str = ""
     logo_path: str = ""
     session_ttl_sec: int = 3600
-    # Show a realistic sign-in page with a password field. The submitted value
-    # is NEVER stored, logged, or transmitted — only the behaviour is recorded.
     require_login: bool = True
-    login_username_label: str = "Username / Email"  # unused; password-only page
+    login_username_label: str = ""  # unused; password-only page
     login_password_label: str = "Password"
     login_button_label: str = "Connect"
 
@@ -268,18 +252,12 @@ class PortalConfig:
                 raw.get("training_message", cls.training_message) or cls.training_message
             ),
             security_contact=str(raw.get("security_contact", "") or ""),
-            educational_message=str(
-                raw.get("educational_message", cls.educational_message)
-                or cls.educational_message
-            ),
+            educational_message=str(raw.get("educational_message", "") or ""),
             training_value=str(raw.get("training_value", "") or ""),
             logo_path=str(raw.get("logo_path", "") or ""),
             session_ttl_sec=int(raw.get("session_ttl_sec", 3600) or 3600),
             require_login=bool(raw.get("require_login", True)),
-            login_username_label=str(
-                raw.get("login_username_label", cls.login_username_label)
-                or cls.login_username_label
-            ),
+            login_username_label=str(raw.get("login_username_label", "") or ""),
             login_password_label=str(
                 raw.get("login_password_label", cls.login_password_label)
                 or cls.login_password_label

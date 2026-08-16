@@ -1,30 +1,18 @@
-"""Local Security Awareness Portal HTTP server.
+"""Local captive-portal HTTP server.
 
-Captive-portal behaviour
-------------------------
-Phones and laptops decide a network "has no internet / needs sign-in" by
-probing well-known URLs (Apple ``captive.apple.com``, Android
-``connectivitycheck.gstatic.com/generate_204``, Windows ``msftconnecttest``).
-dnsmasq resolves every hostname to the lab gateway, so those probes reach this
-server. To make the sign-in page pop up automatically we:
+Phones and laptops probe captive URLs; dnsmasq points them at the lab gateway.
+This server listens on port 80 plus the configured portal port and answers every
+request with the sign-in page so the OS captive assistant opens.
 
-* listen on **port 80** (where the OS probes go) in addition to the configured
-  portal port, and
-* answer *every* request with the portal page (instead of the "Success" body
-  the OS expects), which triggers the captive-portal assistant on the client.
-
-Credential safety
------------------
-The sign-in form posts to ``/login``. The submitted password is read only to
-compute a single boolean (was the field non-empty?) and is then discarded. It
-is never stored, logged, hashed, or transmitted anywhere.
+The sign-in form posts to ``/login``. The password field is read only to compute
+a boolean (non-empty?) and is then discarded.
 """
 
 from __future__ import annotations
 
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 from urllib.parse import parse_qs
 
 from modules.figolab.awareness import portal_pages as templates
@@ -34,7 +22,6 @@ from modules.figolab.awareness.client_sessions import SessionStore
 if TYPE_CHECKING:
     from modules.figolab.lab_config import LabConfig
 
-# Standard port used by OS captive-portal probes.
 CAPTIVE_PORT = 80
 
 
@@ -49,7 +36,6 @@ class AwarenessPortal:
         self.active = False
 
     def alive(self) -> bool:
-        """True if the portal is active and at least one server thread is running."""
         if not self.active:
             return False
         return any(t.is_alive() for t in self._threads) if self._threads else False
@@ -62,15 +48,7 @@ class AwarenessPortal:
         port = self.bound_ports[0] if self.bound_ports else self.config.portal_port
         return f"http://{host}:{port}/"
 
-    def _result_body(self, client_session) -> str:
-        """
-        Realistic post–sign-in confirmation shown to the participant.
-
-        The educational reveal is intentionally NOT shown here — it is delivered
-        later during the debrief / manual report using the live dashboard
-        screenshots and the configured ``educational_message``. On-screen the
-        participant only sees an ordinary "connected" page.
-        """
+    def _connected_body(self) -> str:
         ctx = templates.render_context(self.config)
         return templates.connected_page(
             ssid=ctx["ssid"],
@@ -105,7 +83,6 @@ class AwarenessPortal:
 
         class Handler(BaseHTTPRequestHandler):
             def log_message(self, fmt: str, *args) -> None:  # noqa: A003
-                # Avoid logging request bodies / query strings that might contain training input.
                 return
 
             def _session(self):
@@ -145,59 +122,36 @@ class AwarenessPortal:
                     return
                 portal.metrics.mark_portal_opened(session.session_id)
                 session.portal_opened = True
-                if path.startswith("/result"):
-                    portal.metrics.mark_completed(session.session_id)
-                    session.completed = True
-                    self._send(200, portal._result_body(session), session.session_id)
-                    return
-                # Every other path (including OS captive-portal probes) serves the
-                # sign-in / landing page so the assistant opens on the client.
                 self._send(200, portal._landing_body(session), session.session_id)
 
             def do_POST(self) -> None:  # noqa: N802
                 session = self._session()
                 path = self.path.split("?", 1)[0]
                 length = int(self.headers.get("Content-Length", "0") or 0)
-                # Cap body size; never log raw body.
                 length = min(max(length, 0), 4096)
                 raw = self.rfile.read(length) if length else b""
                 form = parse_qs(raw.decode("utf-8", errors="replace"), keep_blank_values=True)
 
                 if path.startswith("/login"):
-                    # Read the password field ONLY to compute a boolean, then drop it.
                     password = form.get("password", [""])[0]
                     entered_password = bool((password or "").strip())
-                    password = None  # noqa: F841 — explicit discard
+                    password = None  # noqa: F841
                     form.pop("password", None)
-                    form.pop("username", None)
                     portal.metrics.mark_login_submitted(session.session_id, entered_password)
                     session.submitted_login = True
                     session.entered_password = entered_password
                     session.security_prompt_interaction = True
                     portal.metrics.mark_completed(session.session_id)
                     session.completed = True
-                    self._send(200, portal._result_body(session), session.session_id)
+                    self._send(200, portal._connected_body(), session.session_id)
                     return
 
-                # Legacy behavioural buttons (used when require_login is disabled).
-                action = (form.get("action", ["continue"])[0] or "continue").strip()
-                training_input = form.get("training_input", [None])[0]
-                expected = portal.config.portal.training_value or ""
-                if action == "training_value":
-                    safe_record_interaction(
-                        portal.metrics,
-                        session.session_id,
-                        submitted_value=training_input,
-                        expected_training_value=expected,
-                    )
-                    training_input = None
-                else:
-                    safe_record_interaction(portal.metrics, session.session_id)
-                    session.security_prompt_interaction = True
-
+                # Fallback Continue button when password sign-in is disabled.
+                safe_record_interaction(portal.metrics, session.session_id)
+                session.security_prompt_interaction = True
                 portal.metrics.mark_completed(session.session_id)
                 session.completed = True
-                self._send(200, portal._result_body(session), session.session_id)
+                self._send(200, portal._connected_body(), session.session_id)
 
         ports: list[int] = [CAPTIVE_PORT]
         try:
@@ -212,7 +166,6 @@ class AwarenessPortal:
             try:
                 httpd = ThreadingHTTPServer((bind_host, port), Handler)
             except OSError:
-                # e.g. port 80 already taken; keep trying the remaining ports.
                 continue
             httpd.daemon_threads = True
             thread = threading.Thread(

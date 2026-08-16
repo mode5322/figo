@@ -124,14 +124,6 @@ def _configure_portal(settings: Any, api: Any) -> None:
     title = api.ask("Portal title", default=portal.portal_title) or portal.portal_title
     training = api.ask("Training message", default=portal.training_message) or portal.training_message
     contact = api.ask("Security contact", default=portal.security_contact) or portal.security_contact
-    educational = (
-        api.ask("Educational message", default=portal.educational_message) or portal.educational_message
-    )
-    training_value = api.ask(
-        "Optional fake training value (never a real password)",
-        default=portal.training_value,
-    )
-    logo = api.ask("Logo path (optional)", default=portal.logo_path) or portal.logo_path
     require_login = api.confirm(
         "Show a sign-in page with a password field?",
         default=portal.require_login,
@@ -154,12 +146,12 @@ def _configure_portal(settings: Any, api: Any) -> None:
         portal_title=title.strip(),
         training_message=training.strip(),
         security_contact=contact.strip(),
-        educational_message=educational.strip(),
-        training_value=(training_value or "").strip(),
-        logo_path=logo.strip(),
+        educational_message="",
+        training_value="",
+        logo_path="",
         session_ttl_sec=portal.session_ttl_sec,
         require_login=require_login,
-        login_username_label=portal.login_username_label,
+        login_username_label="",
         login_password_label=password_label.strip(),
         login_button_label=button_label.strip(),
     )
@@ -169,7 +161,6 @@ def _configure_portal(settings: Any, api: Any) -> None:
         api.warn_and_back("Could not save settings", str(exc))
         return
     console.print("\n[green]Portal configuration saved.[/green]")
-    console.print("[dim]Real passwords are never collected or stored.[/dim]")
     api.pause()
 
 

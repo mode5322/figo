@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-08-16  
 **Repo:** https://github.com/mode5322/Figo  
-**Branch reviewed:** `cursor/classic-password-only-portal-e15f`  
+**Branch reviewed:** `cursor/cleanup-unused-portal-code-e15f`  
 **Python LOC (app + tests):** ~4800+
 
 This file is the source of truth for how Figo is structured. Update it in the same change whenever code, menus, config, safety rules, or layout change.
@@ -238,12 +238,12 @@ Evil Twin end-to-end.
     "portal_title": "SECURITY AWARENESS TEST",
     "training_message": "...",
     "security_contact": "",
-    "educational_message": "...",
+    "educational_message": "",
     "training_value": "",
     "logo_path": "",
     "session_ttl_sec": 3600,
     "require_login": true,
-    "login_username_label": "Username / Email",
+    "login_username_label": "",
     "login_password_label": "Password",
     "login_button_label": "Connect"
   },
@@ -364,7 +364,7 @@ Live dashboard events (non-sensitive): client connect/leave, portal open, sign-i
 
 **Captive portal:** the portal binds port 80 (OS captive-portal probes) plus `portal_port`, and its catch-all handler answers every request with the sign-in page, so the assistant opens automatically on clients. dnsmasq points all DNS at the gateway.
 
-**Sign-in simulation (blind):** when `portal.require_login` is true (default), the landing page is a classic password-only form posting to `/login`. The handler reads the password field only to compute `entered_password` (a boolean) and discards the value immediately — it is never stored, logged, hashed, or transmitted. The client is then shown an ordinary "You are connected" page (`templates.connected_page`) that does **not** reveal the simulation. The reveal is deferred to the debrief/manual report, using the operator's live-dashboard screenshots and the configured `educational_message`. `templates.result_page` (which lists behaviours and the reveal) is retained for report/debrief use and is not served to clients.
+**Sign-in simulation (blind):** when `portal.require_login` is true (default), the landing page is a classic password-only form posting to `/login`. The handler reads the password field only to compute `entered_password` (a boolean) and discards the value immediately. The client is then shown `templates.connected_page`. Dead templates (`training_page`, `result_page`) were removed.
 
 **AP security:** the lab AP defaults to open (`wpa=0`) but can be WPA2-PSK using an admin-set lab passphrase (the AP's own key, shared with participants — never a harvested credential) to avoid the client "insecure network" warning.
 

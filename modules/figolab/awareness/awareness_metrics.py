@@ -159,13 +159,6 @@ class MetricsStore:
                 self.add_event("interact", f"Security prompt interaction · {session_id[:8]}")
             return m
 
-    def mark_training(self, session_id: str) -> SessionMetrics:
-        with self._lock:
-            m = self.ensure(session_id)
-            m.training_action = True
-            self.add_event("training", f"Training action · {session_id[:8]}")
-            return m
-
     def mark_completed(self, session_id: str) -> SessionMetrics:
         with self._lock:
             m = self.ensure(session_id)
@@ -230,34 +223,12 @@ class MetricsStore:
 def safe_record_interaction(
     metrics: MetricsStore,
     session_id: str,
-    *,
-    submitted_value: Optional[str] = None,
-    expected_training_value: str = "",
 ) -> dict[str, Any]:
-    """
-    Record a behavioral interaction without storing any submitted secret.
-
-    If a training value is configured, only equality against that known fake
-    value is checked. The submitted string itself is never retained.
-    """
+    """Record a behavioral interaction without storing submitted values."""
     metrics.mark_interaction(session_id)
-    training_matched = False
-    if expected_training_value and submitted_value is not None:
-        # Constant-time compare for the known training token only.
-        training_matched = secrets_compare(submitted_value, expected_training_value)
-        if training_matched:
-            metrics.mark_training(session_id)
-    # Intentionally drop submitted_value here — never write it anywhere.
     result = {
         "session_id": session_id,
         "security_prompt_interaction": True,
-        "training_action": training_matched,
     }
     assert_no_sensitive_payload(result)
     return result
-
-
-def secrets_compare(a: str, b: str) -> bool:
-    import hmac
-
-    return hmac.compare_digest(a.encode("utf-8"), b.encode("utf-8"))
