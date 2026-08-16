@@ -215,3 +215,45 @@ def restore_interface(snapshot: InterfaceSnapshot) -> None:
     nmcli = shutil.which("nmcli")
     if nmcli and snapshot.nm_connection:
         _run([nmcli, "connection", "up", snapshot.nm_connection], timeout=30)
+
+
+def prepare_soft_monitor(iface: str, channel: str) -> None:
+    """
+    Put a wireless interface into monitor mode without ``airmon-ng check kill``.
+
+    Used as a *second* radio beside the lab AP. Killing NetworkManager / hostapd
+    would take the awareness AP down, so this path uses only ``iw`` + ``ip``.
+    """
+    if not iface:
+        raise RuntimeError("Monitor interface name is required.")
+    ip = shutil.which("ip")
+    iw = shutil.which("iw")
+    if not ip or not iw:
+        raise RuntimeError("Missing ip or iw — cannot prepare monitor interface.")
+
+    rfkill_unblock()
+    set_nm_managed(iface, False)
+    stop_interfering_processes(iface)
+
+    code, out = _run([ip, "link", "set", iface, "down"], timeout=15)
+    if code != 0:
+        raise RuntimeError(f"Failed to bring {iface} down.\n{out}")
+
+    code, out = _run([iw, "dev", iface, "set", "type", "monitor"], timeout=15)
+    if code != 0:
+        raise RuntimeError(
+            f"Failed to set {iface} to monitor mode.\n{out}\n"
+            "This adapter may lack monitor/injection support."
+        )
+
+    code, out = _run([ip, "link", "set", iface, "up"], timeout=15)
+    if code != 0:
+        raise RuntimeError(f"Failed to bring {iface} up in monitor mode.\n{out}")
+
+    chan = str(channel or "").strip()
+    if chan.isdigit():
+        code, out = _run([iw, "dev", iface, "set", "channel", chan], timeout=15)
+        if code != 0:
+            # Non-fatal: aireplay may still work if the card locks channel later.
+            pass
+

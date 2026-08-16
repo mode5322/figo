@@ -35,6 +35,7 @@ Current product surface:
 | Start-up hardening | Working | rfkill unblock, NM unmanage, stop `wpa_supplicant` on this iface, fail-fast AP-mode check |
 | Robust service startup | Working | hostapd/dnsmasq output captured; wait for `AP-ENABLED`; log tail shown on failure |
 | Live health + self-heal | Working | Dashboard shows AP/DHCP-DNS/Portal status + client list; portal auto-restarts on failure |
+| Optional client-kick | Working | Second radio soft-monitor + periodic authorized deauth against target BSSID; off by default; single-adapter labs cannot force disconnect |
 | Session report | Working | On stop, save JSON + text report (no secrets, no AP passphrase) to `~/figo-reports/` |
 | Lab network options | Working | Gateway/DHCP presets, custom prefix/port/SSID, **AP security (open/WPA2)** |
 | Dry-run lab setup | Working | Shows hostapd/dnsmasq configs without starting AP |
@@ -166,9 +167,9 @@ Figo/
 |---|---|
 | `evil_twin_menu.py` | Submenu (Setup/Requirements then Run); run flow, live dashboard (health + client list), report save prompt |
 | `lab_config.py` | `LabConfig`, `PortalConfig`, SSID/channel/passphrase validation, lab bins |
-| `lab_session.py` | Harden + prepare iface, start hostapd/dnsmasq/portal with captured logs, `ensure_services()` self-heal, `build_session_report()`/`save_session_report()`, `cleanup_lab_session()` |
+| `lab_session.py` | Harden + prepare iface, start hostapd/dnsmasq/portal with captured logs, optional client-kick loop, `ensure_services()` self-heal, `build_session_report()`/`save_session_report()`, `cleanup_lab_session()` |
 | `ap_configs.py` | Write hostapd (open **or WPA2-PSK**) + dnsmasq configs; `parse_dhcp_leases()` client records |
-| `wireless_interface.py` | Snapshot operstate/mode/addrs/NM; restore after lab; `rfkill_unblock()`, `stop_interfering_processes()` |
+| `wireless_interface.py` | Snapshot operstate/mode/addrs/NM; restore after lab; `rfkill_unblock()`, `stop_interfering_processes()`, `prepare_soft_monitor()` (no airmon check kill) |
 | `process_tracker.py` | Track only Figo-started children; SIGTERM then kill |
 | `awareness/portal_server.py` | Local HTTP portal; binds port 80 + `portal_port`; catch-all serves sign-in; `/login` discards password value, records boolean behaviour only |
 | `awareness/client_sessions.py` | UUID-like `secrets.token_urlsafe` sessions with TTL |

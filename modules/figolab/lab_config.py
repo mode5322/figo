@@ -314,6 +314,11 @@ class LabConfig:
     # passphrase the admin sets and shares with authorized participants.
     ap_security: str = "open"
     ap_passphrase: str = ""
+    # Optional authorized client-kick (deauth) against the *target* BSSID.
+    # Requires a second wireless adapter in monitor mode while the lab AP
+    # runs on `interface`. Off by default.
+    kick_clients: bool = False
+    kick_interface: str = ""
 
     def effective_ssid(self) -> str:
         return (self.ap_ssid or self.target_ssid or "").strip()
@@ -380,6 +385,8 @@ class LabConfig:
             portal_port=int(raw.get("portal_port", 8080) or 8080),
             ap_security=str(raw.get("ap_security", "open") or "open").strip().lower(),
             ap_passphrase=str(raw.get("ap_passphrase", "") or ""),
+            kick_clients=bool(raw.get("kick_clients", False)),
+            kick_interface=str(raw.get("kick_interface", "") or ""),
         )
 
 

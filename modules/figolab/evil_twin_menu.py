@@ -16,6 +16,8 @@ from rich.panel import Panel
 from rich.table import Table
 
 from modules.exceptions import BackToMenu, ExitApp
+from modules.network import wireless_interfaces
+from modules.tools import which_or_none
 from modules.ui import parse_menu_index
 from modules.figolab.lab_session import (
     LabError,
@@ -448,6 +450,86 @@ def _show_target_info(row: dict[str, str], interface: str) -> None:
     console.print(Panel(table, title="Target information", border_style="cyan"))
 
 
+def _configure_client_kick(config: LabConfig, api: Any) -> None:
+    """
+    Ask whether to force clients off the real AP (authorized deauth).
+
+    A second wireless adapter is required: one radio hosts the lab AP, the other
+    sends deauth frames at the target BSSID. With a single adapter, clients stay
+    on the real network until they disconnect manually or roam by signal.
+    """
+    config.kick_clients = False
+    config.kick_interface = ""
+
+    ap_iface = (config.interface or "").strip()
+    others = [name for name in wireless_interfaces() if name and name != ap_iface]
+
+    console.print(
+        Panel(
+            "The lab AP alone does not disconnect employees from the real Wi-Fi.\n"
+            "Phones/laptops stay on the original router until they leave that AP.\n\n"
+            "To force a reconnect you need a second wireless adapter that supports\n"
+            "monitor mode + packet injection. Figo will periodically deauth the target\n"
+            "BSSID (authorized assessment only).\n\n"
+            "Also: for devices to auto-join the lab SSID after disconnect, set\n"
+            "AP security to WPA2 with the same shared passphrase employees already\n"
+            "use (option 2). An open lab AP will not look like their known network.",
+            title="Client reconnect",
+            border_style="yellow",
+            box=box.ROUNDED,
+        )
+    )
+
+    if not others:
+        console.print(
+            "[yellow]Only one wireless interface detected "
+            f"({ap_iface or 'none'}). Client-kick is unavailable.[/yellow]"
+        )
+        console.print(
+            "[dim]Workaround: ask the participant to forget/disconnect the real "
+            "network, move closer so the lab signal is stronger, and use WPA2.[/dim]"
+        )
+        return
+
+    if not which_or_none("aireplay-ng"):
+        console.print(
+            "[yellow]aireplay-ng not found — install aircrack-ng to enable client-kick.[/yellow]"
+        )
+        return
+
+    if not api.confirm(
+        "Force clients off the real AP with a second adapter (authorized deauth)?",
+        default=False,
+    ):
+        return
+
+    console.print("\n[bold]Available kick adapters[/bold] (AP uses " f"{ap_iface}):")
+    for idx, name in enumerate(others, start=1):
+        console.print(f"  {idx}) {name}")
+    raw = api.ask("Choose kick adapter number", default="1").strip()
+    try:
+        index = int(raw)
+    except ValueError:
+        api.warn_and_back("Invalid choice", "Enter a listed number.")
+        return
+    if index < 1 or index > len(others):
+        api.warn_and_back("Invalid choice", "Enter a listed number.")
+        return
+
+    if not api.confirm(
+        f"Confirm authorized deauth against BSSID {config.target_bssid} "
+        f"via {others[index - 1]}?",
+        default=False,
+    ):
+        return
+
+    config.kick_clients = True
+    config.kick_interface = others[index - 1]
+    console.print(
+        f"[green]Client-kick armed:[/green] {config.kick_interface} → {config.target_bssid}"
+    )
+
+
 def _build_lab_config(settings: Any, row: dict[str, str], mode: str) -> LabConfig:
     portal = _portal_from_settings(settings)
     portal_enabled = mode == "awareness" and portal.enabled
@@ -481,6 +563,16 @@ def _confirm_start(config: LabConfig, api: Any) -> bool:
         if config.portal_enabled and config.portal.require_login
         else ("Awareness prompt only" if config.portal_enabled else "Disabled")
     )
+    if config.kick_clients and config.kick_interface:
+        kick = f"ON · {config.kick_interface} → {config.target_bssid}"
+    else:
+        kick = "OFF (clients stay on real AP until they disconnect / roam)"
+    auto_note = ""
+    if not config.is_secured():
+        auto_note = (
+            "\n⚠ Lab AP is open — devices usually will NOT auto-rejoin after disconnect.\n"
+            "  Prefer WPA2 (Evil Twin option 2) with the known shared passphrase."
+        )
     body = (
         f"Target SSID : {config.target_ssid}\n"
         f"Lab AP SSID : {config.effective_ssid()}\n"
@@ -491,9 +583,11 @@ def _confirm_start(config: LabConfig, api: Any) -> bool:
         f"DHCP range  : {config.dhcp_range_start} – {config.dhcp_range_end}\n"
         f"Portal      : {'Enabled' if config.portal_enabled else 'Disabled'} · captive :80 + :{config.portal_port}\n"
         f"Sign-in     : {login}\n"
+        f"Client-kick : {kick}\n"
         f"{'─' * 38}\n"
         "This is an authorized security lab.\n"
         "No real passwords will be collected or stored."
+        f"{auto_note}"
     )
     console.print(Panel(body, title="EVIL TWIN LAB", border_style="yellow", box=box.ROUNDED))
     return api.confirm("Start assessment?", default=False)
@@ -585,6 +679,8 @@ def _run_lab_flow(settings: Any, api: Any, *, mode: str) -> None:
             _configure_portal(settings, api)
             config = _build_lab_config(settings, row, mode)
 
+    _configure_client_kick(config, api)
+
     api.clear_screen()
     if not _confirm_start(config, api):
         console.print("[dim]Assessment cancelled.[/dim]")
@@ -597,6 +693,16 @@ def _run_lab_flow(settings: Any, api: Any, *, mode: str) -> None:
         console.print("\n[dim]Starting controlled lab AP...[/dim]")
         session = start_lab_session(config, enable_portal=(mode == "awareness"))
         console.print("[green]Lab AP started.[/green]")
+        if session.kick_ok():
+            console.print(
+                f"[green]Client-kick active:[/green] {session.kick_monitor} → "
+                f"{session.config.target_bssid}"
+            )
+        elif config.kick_clients:
+            console.print(
+                f"[yellow]Client-kick requested but not running:[/yellow] "
+                f"{session.kick_last_status or 'unknown'}"
+            )
         if session.portal_active and session.portal:
             console.print(f"[dim]Awareness portal:[/dim] {session.portal.url}")
         api.pause("Press Enter for live dashboard (S or Ctrl+C to stop)...")
@@ -684,6 +790,19 @@ def _dashboard_renderable(session) -> Panel:
         portal_ports = " + ".join(f":{p}" for p in session.portal.bound_ports)
     portal_disabled = session.config.lab_mode == "wifi" or not session.portal_active
     all_ok = session.ap_ok() and session.dnsmasq_ok() and (portal_disabled or session.portal_ok())
+    if session.config.kick_clients:
+        if session.kick_ok():
+            kick_line = (
+                f"Client-kick: [green]Active[/green] · {session.kick_monitor} · "
+                f"bursts {session.kick_bursts} · {session.kick_last_status or '-'}"
+            )
+        else:
+            kick_line = (
+                f"Client-kick: [yellow]Idle[/yellow] · "
+                f"{session.kick_last_status or 'not running'}"
+            )
+    else:
+        kick_line = "Client-kick: [dim]Off[/dim] (no forced disconnect from real AP)"
     body = (
         f"SSID: {session.config.effective_ssid()}\n"
         f"Channel: {session.config.channel}  ·  Band: {channel_band(session.config.channel)}\n"
@@ -695,6 +814,7 @@ def _dashboard_renderable(session) -> Panel:
         f"{_health('AP', session.ap_ok())}   "
         f"{_health('DHCP/DNS', session.dnsmasq_ok())}   "
         f"{_health('Portal', session.portal_ok(), disabled=portal_disabled)}  ·  {portal_ports}\n"
+        f"{kick_line}\n"
         f"{'─' * 42}\n"
         f"Connected devices  : {snap['connected_devices']}\n"
         f"Portal visits      : {snap['portal_visits']}\n"

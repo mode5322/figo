@@ -146,6 +146,10 @@ Saved under `lab_network` in `~/.config/figo/config.json`. When starting a lab, 
 
 **Realistic (blind) scenario:** the client-facing pages are deliberately neutral — a normal-looking Wi-Fi sign-in page, and after submission an ordinary "You are connected" confirmation. They do **not** reveal that this is a simulation. The participant only learns it was an authorized awareness test later, during the **debrief / manual report**, using the operator's screenshots from the live Evil Twin dashboard and the configured educational message. (Credential safety is unchanged — the password is still never stored.)
 
+**Why employees stay on the real Wi-Fi:** starting the lab AP does **not** by itself disconnect clients from the original router. Phones and laptops stay associated until they leave that AP. Figo can optionally run **client-kick** (authorized deauth) if you have a **second** wireless adapter: one radio hosts the lab AP, the other periodically deauths the target BSSID. With a single adapter, ask the participant to disconnect, or move closer so the lab signal is stronger.
+
+**Auto-rejoin tip:** set **AP security → WPA2** (Evil Twin option **2**) with the same shared passphrase employees already use. An **open** lab AP usually will **not** auto-join after disconnect because it does not match their known secured network.
+
 The live Awareness dashboard shows behaviour events (clients, portal opens, sign-in submissions, **passwords entered**, completions) without ever storing passwords. This dashboard is the source of the screenshots for the manual report.
 
 Hashcat GPU: **warning only**. Figo never installs GPU drivers; CPU (`aircrack-ng`) is the default crack engine.
@@ -157,19 +161,21 @@ Workflow (Security Awareness Lab):
 3. Select an **authorized** target  
 4. Review target SSID / BSSID / channel / band / security / signal / interface  
 5. Confirm portal + network settings (incl. AP security)  
-6. Explicit **Y/N** authorization confirmation (never auto-starts)  
-7. Start controlled lab AP + local portal — Figo first hardens the adapter (rfkill unblock, unmanage from NetworkManager, stop any `wpa_supplicant` holding *this* interface) and fails fast with a clear message if the adapter lacks AP mode  
-8. Participants connect → neutral sign-in page pops up → they submit → they see a normal "connected" page  
-9. Live Rich dashboard captures their behaviour in real time and shows **service health (AP / DHCP-DNS / Portal)** and the **connected client list (IP · MAC · host)** — this is what you screenshot for the report. The portal auto-restarts if its HTTP server dies.  
-10. Press **S** or **Ctrl+C** to stop  
-11. Full cleanup and best-effort restore of the original interface / NetworkManager state  
-12. Figo offers to **save a session report** (JSON + text, no secrets) under `~/figo-reports/` for the debrief  
+6. Optional **client-kick**: choose a second adapter to force clients off the real AP (authorized deauth), or skip if you only have one radio  
+7. Explicit **Y/N** authorization confirmation (never auto-starts)  
+8. Start controlled lab AP + local portal — Figo first hardens the adapter (rfkill unblock, unmanage from NetworkManager, stop any `wpa_supplicant` holding *this* interface) and fails fast with a clear message if the adapter lacks AP mode  
+9. Participants connect → neutral sign-in page pops up → they submit → they see a normal "connected" page  
+10. Live Rich dashboard captures their behaviour in real time and shows **service health (AP / DHCP-DNS / Portal)**, **client-kick status**, and the **connected client list (IP · MAC · host)** — this is what you screenshot for the report. The portal auto-restarts if its HTTP server dies.  
+11. Press **S** or **Ctrl+C** to stop  
+12. Full cleanup and best-effort restore of the original interface / NetworkManager state  
+13. Figo offers to **save a session report** (JSON + text, no secrets) under `~/figo-reports/` for the debrief  
 
 ### Reliability & troubleshooting
 
 - If the AP fails to start, Figo shows the tail of the actual `hostapd` output (e.g. unsupported channel, driver refuses AP mode). It confirms the AP via hostapd's `AP-ENABLED` event rather than assuming success.
 - If DHCP/DNS fails, the tail of `dnsmasq` output is shown (commonly port 53 taken by `systemd-resolved`).
-- The lab AP defaults to open; use WPA2 (menu 3) to avoid the "insecure network" warning.
+- The lab AP defaults to open; use **WPA2** in Evil Twin option **2** to avoid the "insecure network" warning and improve auto-rejoin.
+- Employees do not leave the real Wi-Fi automatically with one adapter — enable client-kick (second adapter) or disconnect manually.
 
 ## Security Awareness Lab
 
@@ -280,7 +286,10 @@ Possible causes:
 Clients must join the lab SSID. The portal binds to the lab gateway IP on port **80** (captive-portal detection) plus the configured `portal_port` (default `8080`). DNS is redirected locally via dnsmasq so OS captive-portal probes reach the portal and the sign-in page opens automatically. If port 80 is already in use on the host, the portal still serves on `portal_port` but the automatic pop-up may not trigger — free port 80 or open `http://<gateway-ip>/` manually.
 
 **Network shows as "insecure / open"**  
-Open APs always warn on clients. Set **AP security → WPA2** in *Configure lab network* and share the lab passphrase with participants to show a padlock and remove the warning.
+Open APs always warn on clients. Set **AP security → WPA2** in *Configure lab network* (Evil Twin option **2**) and share the lab passphrase with participants to show a padlock and remove the warning.
+
+**Employee stays on the real Wi-Fi / must disconnect manually**  
+Expected with a single adapter: the lab AP does not kick clients off the original router. Use a second wireless adapter and enable **client-kick** when starting option **5**, or ask the participant to disconnect. For auto-rejoin after disconnect, use WPA2 with the known shared passphrase (not an open lab AP).
 
 **Ctrl+C did not restore Wi-Fi**  
 Re-run cleanup by starting/stopping the lab again, or manually: `nmcli device set <iface> managed yes` and reconnect.
