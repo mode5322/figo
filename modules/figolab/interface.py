@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import shutil
+import signal
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -117,6 +119,53 @@ def snapshot_interface(name: str) -> InterfaceSnapshot:
         nm_connection=nmcli_active_connection(name),
         nm_was_running=nm_is_running(),
     )
+
+
+def rfkill_unblock() -> None:
+    """Best-effort: clear any soft rfkill block that would stop the AP coming up."""
+    rfkill = shutil.which("rfkill")
+    if not rfkill:
+        return
+    _run([rfkill, "unblock", "wifi"], timeout=10)
+    _run([rfkill, "unblock", "wlan"], timeout=10)
+
+
+def stop_interfering_processes(iface: str) -> list[int]:
+    """
+    Stop only the wpa_supplicant instances bound to *this* interface.
+
+    A wpa_supplicant still holding the adapter is the most common reason
+    hostapd fails to start. We target processes whose command line references
+    both ``wpa_supplicant`` and the specific interface name, so unrelated
+    system daemons are never touched. Returns the PIDs we signalled.
+    """
+    if not iface:
+        return []
+    killed: list[int] = []
+    proc_root = "/proc"
+    try:
+        entries = os.listdir(proc_root)
+    except OSError:
+        return killed
+    for entry in entries:
+        if not entry.isdigit():
+            continue
+        try:
+            with open(f"{proc_root}/{entry}/cmdline", "rb") as fh:
+                raw = fh.read()
+        except OSError:
+            continue
+        cmdline = raw.replace(b"\x00", b" ").decode("utf-8", errors="replace")
+        if "wpa_supplicant" in cmdline and iface in cmdline.split():
+            pid = int(entry)
+            if pid == os.getpid():
+                continue
+            try:
+                os.kill(pid, signal.SIGTERM)
+                killed.append(pid)
+            except OSError:
+                pass
+    return killed
 
 
 def set_nm_managed(name: str, managed: bool) -> None:

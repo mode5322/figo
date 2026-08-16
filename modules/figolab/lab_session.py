@@ -11,12 +11,24 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-from modules.figolab.ap import build_dnsmasq_conf, build_hostapd_conf, count_dhcp_leases
-from modules.figolab.awareness.metrics import MetricsStore
+from modules.figolab.ap import (
+    build_dnsmasq_conf,
+    build_hostapd_conf,
+    count_dhcp_leases,
+    parse_dhcp_leases,
+)
+from modules.figolab.awareness.metrics import MetricsStore, assert_no_sensitive_payload, utc_now_iso
 from modules.figolab.awareness.portal import AwarenessPortal
 from modules.figolab.awareness.session import SessionStore
-from modules.figolab.interface import InterfaceSnapshot, restore_interface, set_nm_managed, snapshot_interface
-from modules.figolab.models import LAB_BINS, LabConfig
+from modules.figolab.interface import (
+    InterfaceSnapshot,
+    restore_interface,
+    rfkill_unblock,
+    set_nm_managed,
+    snapshot_interface,
+    stop_interfering_processes,
+)
+from modules.figolab.models import LAB_BINS, LabConfig, channel_band
 from modules.figolab.processes import ProcessTracker
 
 
@@ -39,11 +51,15 @@ class LabSession:
     temp_dir: Optional[Path] = None
     hostapd_conf: Optional[Path] = None
     dnsmasq_conf: Optional[Path] = None
+    hostapd_log: Optional[Path] = None
+    dnsmasq_log: Optional[Path] = None
     leases_path: Optional[Path] = None
     started_at: float = 0.0
     ap_active: bool = False
     portal_active: bool = False
     _cleaned: bool = False
+    _portal_restarts: int = 0
+    _log_handles: list = field(default_factory=list)
     _lock: threading.RLock = field(default_factory=threading.RLock)
 
     def runtime_sec(self) -> int:
@@ -56,6 +72,53 @@ class LabSession:
         count = count_dhcp_leases(path) if path else 0
         self.metrics.set_connected_devices(count)
         return count
+
+    def recent_clients(self, limit: int = 6) -> list[dict[str, str]]:
+        if not self.leases_path:
+            return []
+        clients = parse_dhcp_leases(self.leases_path)
+        return clients[-max(1, int(limit)):]
+
+    def ap_ok(self) -> bool:
+        return self.ap_active and self.tracker.alive("hostapd")
+
+    def dnsmasq_ok(self) -> bool:
+        return self.tracker.alive("dnsmasq")
+
+    def portal_ok(self) -> bool:
+        return bool(self.portal is not None and self.portal.alive())
+
+    def ensure_services(self) -> None:
+        """
+        Best-effort self-healing for the live dashboard.
+
+        Currently restarts the awareness portal if its HTTP server died, up to a
+        small retry budget. AP/DHCP failures are surfaced to the operator rather
+        than silently restarted (they usually indicate a hardware/driver issue).
+        """
+        if not self.portal_active or self.portal is None:
+            return
+        if self.portal.alive():
+            return
+        if self._portal_restarts >= 3:
+            return
+        self._portal_restarts += 1
+        try:
+            self.portal.stop()
+        except Exception:
+            pass
+        try:
+            self.portal.start(bind_host=self.config.gateway_ip)
+        except OSError:
+            try:
+                self.portal.start(bind_host="0.0.0.0")
+            except OSError:
+                self.portal_active = False
+                self.metrics.add_event("service", "Portal failed to restart")
+                return
+        self.metrics.add_event(
+            "service", f"Portal auto-restarted (attempt {self._portal_restarts})"
+        )
 
 
 _ACTIVE: Optional[LabSession] = None
@@ -80,8 +143,32 @@ def prepare_interface(config: LabConfig, snapshot: InterfaceSnapshot) -> None:
     if not ip or not iw:
         raise LabError("Missing ip or iw — cannot prepare the wireless interface.")
 
-    # Unmanage from NetworkManager to avoid fights with hostapd.
+    # Fail fast if the adapter cannot do AP mode — clearer than a cryptic
+    # hostapd crash later. Only block when support is explicitly False.
+    try:
+        from modules.preflight import probe_adapter_capabilities
+
+        caps = probe_adapter_capabilities(iface)
+        if caps.supports_ap is False:
+            raise LabError(
+                f"Adapter {iface} does not support AP (master) mode.\n"
+                "Possible fixes:\n"
+                "- Use a wireless adapter that supports AP mode.\n"
+                "- Check `iw list` → 'Supported interface modes' for 'AP'.\n"
+                "- Some drivers need a different chipset for hostapd."
+            )
+    except LabError:
+        raise
+    except Exception:
+        # Capability probing is best-effort; never block on probe errors.
+        pass
+
+    # Clear soft rfkill blocks and release the adapter from anything holding it.
+    rfkill_unblock()
     set_nm_managed(iface, False)
+    killed = stop_interfering_processes(iface)
+    if killed:
+        time.sleep(0.3)
 
     code, out = _run([ip, "link", "set", iface, "down"])
     if code != 0:
@@ -127,6 +214,8 @@ def start_lab_session(config: LabConfig, *, enable_portal: bool) -> LabSession:
     session.temp_dir = Path(tempfile.mkdtemp(prefix="figo-lab-"))
     session.hostapd_conf = session.temp_dir / "hostapd.conf"
     session.dnsmasq_conf = session.temp_dir / "dnsmasq.conf"
+    session.hostapd_log = session.temp_dir / "hostapd.log"
+    session.dnsmasq_log = session.temp_dir / "dnsmasq.log"
     session.leases_path = session.temp_dir / "dnsmasq.leases"
     session.leases_path.write_text("", encoding="utf-8")
 
@@ -141,30 +230,43 @@ def start_lab_session(config: LabConfig, *, enable_portal: bool) -> LabSession:
         dnsmasq = shutil.which("dnsmasq")
         assert hostapd and dnsmasq
 
-        session.tracker.start("hostapd", [hostapd, str(session.hostapd_conf)])
-        time.sleep(0.8)
-        if not session.tracker.alive("hostapd"):
+        # hostapd: capture output so failures produce actionable messages, and
+        # confirm the AP actually enabled instead of just "process is alive".
+        hostapd_out = _open_log(session, session.hostapd_log)
+        session.tracker.start(
+            "hostapd",
+            [hostapd, str(session.hostapd_conf)],
+            stdout=hostapd_out,
+            stderr=subprocess.STDOUT,
+        )
+        if not _wait_for_hostapd(session, timeout=6.0):
+            tail = _read_tail(session.hostapd_log)
             raise LabError(
                 "Failed to start the lab AP.\n"
                 "Possible causes:\n"
                 "- Adapter does not support AP mode.\n"
-                "- hostapd configuration is invalid.\n"
-                "- Another process is using the interface."
+                "- hostapd configuration is invalid or channel unsupported.\n"
+                "- Another process is using the interface.\n"
+                + (f"\nhostapd said:\n{tail}" if tail else "")
             )
         session.ap_active = True
 
+        dnsmasq_out = _open_log(session, session.dnsmasq_log)
         session.tracker.start(
             "dnsmasq",
             [dnsmasq, "-C", str(session.dnsmasq_conf), "-d"],
+            stdout=dnsmasq_out,
+            stderr=subprocess.STDOUT,
         )
-        time.sleep(0.4)
-        if not session.tracker.alive("dnsmasq"):
+        if not _wait_alive(session, "dnsmasq", timeout=2.0):
+            tail = _read_tail(session.dnsmasq_log)
             raise LabError(
                 "Failed to start DHCP/DNS (dnsmasq).\n"
                 "Possible causes:\n"
-                "- Port 53 already in use\n"
+                "- Port 53 already in use (e.g. systemd-resolved)\n"
                 "- Invalid dnsmasq configuration\n"
-                "- Interface not ready"
+                "- Interface not ready\n"
+                + (f"\ndnsmasq said:\n{tail}" if tail else "")
             )
 
         if enable_portal and config.portal_enabled:
@@ -182,6 +284,54 @@ def start_lab_session(config: LabConfig, *, enable_portal: bool) -> LabSession:
     except Exception:
         cleanup_lab_session(session)
         raise
+
+
+def _open_log(session: LabSession, path: Path):
+    handle = open(path, "wb", buffering=0)
+    session._log_handles.append(handle)
+    return handle
+
+
+def _read_tail(path: Optional[Path], max_lines: int = 15) -> str:
+    if not path or not path.exists():
+        return ""
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return ""
+    tail = [ln for ln in lines if ln.strip()][-max_lines:]
+    return "\n".join(tail)
+
+
+def _wait_alive(session: LabSession, name: str, timeout: float) -> bool:
+    deadline = time.time() + timeout
+    # Give the process a brief moment to fail fast.
+    time.sleep(min(0.4, timeout))
+    while time.time() < deadline:
+        if not session.tracker.alive(name):
+            return False
+        time.sleep(0.1)
+    return session.tracker.alive(name)
+
+
+def _wait_for_hostapd(session: LabSession, timeout: float) -> bool:
+    """
+    Return True once hostapd reports the AP is enabled, or it is still alive at
+    timeout (some drivers do not print AP-ENABLED). Return False if it exits or
+    logs a fatal error.
+    """
+    deadline = time.time() + timeout
+    fatal_markers = ("AP-DISABLED", "Could not configure driver mode", "nl80211: Could not")
+    while time.time() < deadline:
+        if not session.tracker.alive("hostapd"):
+            return False
+        log = _read_tail(session.hostapd_log, max_lines=40)
+        if "AP-ENABLED" in log:
+            return True
+        if any(marker in log for marker in fatal_markers):
+            return False
+        time.sleep(0.15)
+    return session.tracker.alive("hostapd")
 
 
 def cleanup_lab_session(session: Optional[LabSession] = None) -> None:
@@ -213,6 +363,14 @@ def cleanup_lab_session(session: Optional[LabSession] = None) -> None:
         except Exception:
             pass
         session.ap_active = False
+
+        # Close captured hostapd/dnsmasq log file handles.
+        for handle in session._log_handles:
+            try:
+                handle.close()
+            except Exception:
+                pass
+        session._log_handles.clear()
 
         # 5–6. Remove temporary configuration / session data
         if session.sessions is not None:
@@ -298,3 +456,92 @@ def dry_run_lab_configs(config: LabConfig) -> tuple[str, str, str]:
         return hostapd_text, dnsmasq_text, "\n".join(notes)
     finally:
         _rm_tree(temp_dir)
+
+
+def build_session_report(session: LabSession) -> tuple[dict, str]:
+    """
+    Build a shareable session report (dict + human-readable text) for the
+    manual debrief. Contains only non-sensitive assessment data — never any
+    submitted value, and never the AP passphrase. Call this BEFORE cleanup,
+    because cleanup clears live metrics and lease files.
+    """
+    config = session.config
+    snap = session.metrics.snapshot()
+    clients = session.recent_clients(limit=100)
+    report = {
+        "generated_at": utc_now_iso(),
+        "runtime_sec": session.runtime_sec(),
+        "lab": {
+            "ssid": config.effective_ssid(),
+            "channel": str(config.channel),
+            "band": channel_band(config.channel),
+            "ap_security": "wpa2" if config.is_secured() else "open",
+            "gateway": f"{config.gateway_ip}/{config.subnet_prefix}",
+            "dhcp_range": f"{config.dhcp_range_start}-{config.dhcp_range_end}",
+            "portal_ports": [80, int(config.portal_port)],
+        },
+        "metrics": {
+            "connected_devices": snap["connected_devices"],
+            "portal_visits": snap["portal_visits"],
+            "login_submissions": snap["login_submissions"],
+            "passwords_entered": snap["passwords_entered"],
+            "interactions": snap["interactions"],
+            "completed": snap["completed"],
+        },
+        "clients": clients,
+        "events": snap.get("events", []),
+    }
+    # Defence in depth: make sure nothing sensitive slipped into the payload.
+    assert_no_sensitive_payload(report["lab"])
+    assert_no_sensitive_payload(report["metrics"])
+
+    m = report["metrics"]
+    lines = [
+        "FIGO SECURITY AWARENESS — SESSION REPORT",
+        "=" * 42,
+        f"Generated : {report['generated_at']}",
+        f"Runtime   : {report['runtime_sec']}s",
+        "",
+        f"SSID      : {report['lab']['ssid']}",
+        f"Channel   : {report['lab']['channel']} ({report['lab']['band']})",
+        f"AP secure : {report['lab']['ap_security']}",
+        f"Gateway   : {report['lab']['gateway']}",
+        "",
+        "RESULTS",
+        "-" * 42,
+        f"Connected devices  : {m['connected_devices']}",
+        f"Portal visits      : {m['portal_visits']}",
+        f"Sign-in submissions: {m['login_submissions']}",
+        f"Passwords entered  : {m['passwords_entered']}   (values never stored)",
+        f"Interactions       : {m['interactions']}",
+        f"Completed          : {m['completed']}",
+        "",
+        "CONNECTED CLIENTS",
+        "-" * 42,
+    ]
+    if clients:
+        for c in clients:
+            host = c.get("hostname") or "-"
+            lines.append(f"  {c.get('mac', '?'):<18} {c.get('ip', '?'):<15} {host}")
+    else:
+        lines.append("  (none recorded)")
+    lines += ["", "EVENT LOG", "-" * 42]
+    for ev in report["events"]:
+        lines.append(f"  {ev.get('ts', '')}  {ev.get('kind', '')}: {ev.get('message', '')}")
+    text = "\n".join(lines) + "\n"
+    return report, text
+
+
+def save_session_report(report: dict, text: str, *, directory: Optional[Path] = None) -> Path:
+    """Write the report as timestamped .json + .txt; returns the .txt path."""
+    import json
+
+    directory = directory or (Path.home() / "figo-reports")
+    directory.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    base = directory / f"awareness-{stamp}"
+    json_path = base.with_suffix(".json")
+    txt_path = base.with_suffix(".txt")
+    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    txt_path.write_text(text, encoding="utf-8")
+    return txt_path

@@ -19,9 +19,11 @@ from modules.exceptions import BackToMenu, ExitApp
 from modules.ui import parse_menu_index
 from modules.figolab.lab_session import (
     LabError,
+    build_session_report,
     cleanup_lab_session,
     detect_lab_dependencies,
     dry_run_lab_configs,
+    save_session_report,
     start_lab_session,
 )
 from modules.figolab.models import (
@@ -590,6 +592,7 @@ def _run_lab_flow(settings: Any, api: Any, *, mode: str) -> None:
         return
 
     session = None
+    report = None
     try:
         console.print("\n[dim]Starting controlled lab AP...[/dim]")
         session = start_lab_session(config, enable_portal=(mode == "awareness"))
@@ -598,37 +601,100 @@ def _run_lab_flow(settings: Any, api: Any, *, mode: str) -> None:
             console.print(f"[dim]Awareness portal:[/dim] {session.portal.url}")
         api.pause("Press Enter for live dashboard (S or Ctrl+C to stop)...")
         _live_dashboard(session, api)
+        # Capture the report BEFORE cleanup clears live metrics / lease files.
+        report = build_session_report(session)
     except LabError as exc:
         api.warn_and_back("Lab failed", str(exc))
     except api.BackToMenu:
+        if session is not None:
+            try:
+                report = build_session_report(session)
+            except Exception:
+                report = None
         cleanup_lab_session(session)
+        _maybe_save_report(report, api)
         raise
     except KeyboardInterrupt:
         console.print("\n[yellow]Stopping assessment...[/yellow]")
+        if session is not None and report is None:
+            try:
+                report = build_session_report(session)
+            except Exception:
+                report = None
     finally:
         cleanup_lab_session(session)
         console.print("[green]Cleanup complete. Original network state restore attempted.[/green]")
-        api.pause()
+    _maybe_save_report(report, api)
+    api.pause()
+
+
+def _maybe_save_report(report, api: Any) -> None:
+    """Offer to persist a non-sensitive session report for the manual debrief."""
+    if not report:
+        return
+    report_data, report_text = report
+    metrics = report_data.get("metrics", {})
+    console.print(
+        Panel(
+            f"Connected devices  : {metrics.get('connected_devices', 0)}\n"
+            f"Sign-in submissions: {metrics.get('login_submissions', 0)}\n"
+            f"Passwords entered  : {metrics.get('passwords_entered', 0)}\n"
+            f"Completed          : {metrics.get('completed', 0)}",
+            title="Session summary (for report)",
+            border_style="cyan",
+        )
+    )
+    try:
+        if not api.confirm("Save a session report file for the debrief?", default=True):
+            return
+    except (BackToMenu, ExitApp):
+        return
+    try:
+        path = save_session_report(report_data, report_text)
+    except OSError as exc:
+        console.print(f"[yellow]Could not save report:[/yellow] {exc}")
+        return
+    console.print(f"[green]Report saved:[/green] {path}")
+    console.print(f"[dim]JSON:[/dim] {path.with_suffix('.json')}")
+
+
+def _health(label: str, ok: bool, *, disabled: bool = False) -> str:
+    if disabled:
+        return f"{label}: [dim]Disabled[/dim]"
+    return f"{label}: [green]Active[/green]" if ok else f"{label}: [red]Down[/red]"
+
+
+def _format_clients(clients: list[dict[str, str]]) -> str:
+    if not clients:
+        return "[dim](no DHCP leases yet)[/dim]"
+    lines: list[str] = []
+    for c in clients:
+        host = c.get("hostname") or "-"
+        lines.append(f"{c.get('ip', '?'):<15} {c.get('mac', '?'):<18} {host}")
+    return "\n".join(lines)
 
 
 def _dashboard_renderable(session) -> Panel:
     session.refresh_client_count()
+    session.ensure_services()
     snap = session.metrics.snapshot()
-    ap = "Active" if session.ap_active and session.tracker.alive("hostapd") else "Down"
-    portal = "Active" if session.portal_active else ("Disabled" if session.config.lab_mode == "wifi" else "Down")
     security = "WPA2 (secured)" if session.config.is_secured() else "open (insecure)"
     portal_ports = ":80 + :{}".format(session.config.portal_port)
     if session.portal and session.portal.bound_ports:
         portal_ports = " + ".join(f":{p}" for p in session.portal.bound_ports)
+    portal_disabled = session.config.lab_mode == "wifi" or not session.portal_active
+    all_ok = session.ap_ok() and session.dnsmasq_ok() and (portal_disabled or session.portal_ok())
     body = (
         f"SSID: {session.config.effective_ssid()}\n"
         f"Channel: {session.config.channel}  ·  Band: {channel_band(session.config.channel)}\n"
         f"Security: {security}\n"
         f"Gateway: {session.config.gateway_ip}/{session.config.subnet_prefix}\n"
         f"DHCP: {session.config.dhcp_range_start} – {session.config.dhcp_range_end}\n"
-        f"AP: {ap}\n"
-        f"Portal: {portal}  ·  {portal_ports}\n"
         f"Runtime: {session.runtime_sec()}s\n"
+        f"{'─' * 42}\n"
+        f"{_health('AP', session.ap_ok())}   "
+        f"{_health('DHCP/DNS', session.dnsmasq_ok())}   "
+        f"{_health('Portal', session.portal_ok(), disabled=portal_disabled)}  ·  {portal_ports}\n"
         f"{'─' * 42}\n"
         f"Connected devices  : {snap['connected_devices']}\n"
         f"Portal visits      : {snap['portal_visits']}\n"
@@ -637,14 +703,17 @@ def _dashboard_renderable(session) -> Panel:
         f"Interactions       : {snap['interactions']}\n"
         f"Completed          : {snap['completed']}\n"
         f"{'─' * 42}\n"
+        f"[dim]Connected clients (ip · mac · host)[/dim]\n"
+        f"{_format_clients(session.recent_clients(5))}\n"
+        f"{'─' * 42}\n"
         f"[dim]Live behaviour events[/dim]\n"
         f"{_format_events(session.metrics.recent_events(6))}"
     )
     return Panel(
         body,
-        title="SECURITY AWARENESS LAB" if session.config.lab_mode == "awareness" else "WIFI LAB",
+        title="SECURITY AWARENESS LAB",
         subtitle="[S] Stop Assessment  ·  Ctrl+C",
-        border_style="green",
+        border_style="green" if all_ok else "yellow",
         box=box.ROUNDED,
     )
 

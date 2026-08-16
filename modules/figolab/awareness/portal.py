@@ -48,6 +48,12 @@ class AwarenessPortal:
         self.bound_ports: list[int] = []
         self.active = False
 
+    def alive(self) -> bool:
+        """True if the portal is active and at least one server thread is running."""
+        if not self.active:
+            return False
+        return any(t.is_alive() for t in self._threads) if self._threads else False
+
     @property
     def url(self) -> str:
         host = self.config.gateway_ip or "127.0.0.1"

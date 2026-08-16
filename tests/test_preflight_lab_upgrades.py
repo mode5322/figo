@@ -2,14 +2,23 @@
 
 from __future__ import annotations
 
+import json
+import time
 from pathlib import Path
 from unittest.mock import patch
 
-from modules.figolab.ap import build_hostapd_conf
+from modules.figolab.ap import build_hostapd_conf, count_dhcp_leases, parse_dhcp_leases
 from modules.figolab.awareness import templates
 from modules.figolab.awareness.metrics import MetricsStore
 from modules.figolab.awareness.portal import CAPTIVE_PORT
-from modules.figolab.lab_session import dry_run_lab_configs
+from modules.figolab.interface import stop_interfering_processes
+from modules.figolab.lab_session import (
+    LabSession,
+    _read_tail,
+    build_session_report,
+    dry_run_lab_configs,
+    save_session_report,
+)
 from modules.figolab.models import (
     LabConfig,
     normalize_lab_network,
@@ -208,3 +217,71 @@ def test_connected_page_does_not_reveal_simulation():
     for giveaway in ("simulation", "awareness", "this was a", "test", "phishing"):
         assert giveaway not in low
     assert "CorpWiFi" in html
+
+
+def test_parse_dhcp_leases(tmp_path: Path):
+    lease = tmp_path / "leases"
+    lease.write_text(
+        "1699999999 aa:bb:cc:dd:ee:ff 10.66.66.10 iphone 01:aa:bb\n"
+        "1699999999 11:22:33:44:55:66 10.66.66.11 * *\n"
+        "\n",
+        encoding="utf-8",
+    )
+    clients = parse_dhcp_leases(lease)
+    assert len(clients) == 2
+    assert clients[0]["mac"] == "aa:bb:cc:dd:ee:ff"
+    assert clients[0]["ip"] == "10.66.66.10"
+    assert clients[0]["hostname"] == "iphone"
+    assert clients[1]["hostname"] == ""  # "*" means unknown
+    assert count_dhcp_leases(lease) == 2
+    assert parse_dhcp_leases(tmp_path / "missing") == []
+
+
+def test_read_tail(tmp_path: Path):
+    log = tmp_path / "hostapd.log"
+    log.write_text("line1\n\nline2\nAP-ENABLED\n", encoding="utf-8")
+    tail = _read_tail(log, max_lines=2)
+    assert "AP-ENABLED" in tail
+    assert "line1" not in tail  # trimmed to last 2 non-empty lines
+    assert _read_tail(tmp_path / "nope") == ""
+
+
+def test_stop_interfering_processes_safe_on_unknown_iface():
+    # Must never raise and must not touch anything for a non-existent iface.
+    assert stop_interfering_processes("figo-nonexistent-iface-xyz") == []
+    assert stop_interfering_processes("") == []
+
+
+def test_session_report_has_no_secrets_and_counts(tmp_path: Path):
+    cfg = LabConfig(
+        target_ssid="Corp",
+        ap_ssid="Corp",
+        channel="6",
+        interface="wlan0",
+        ap_interface="wlan0",
+        ap_security="wpa2",
+        ap_passphrase="LabPass1234",
+    )
+    session = LabSession(config=cfg)
+    session.leases_path = tmp_path / "leases"
+    session.leases_path.write_text(
+        "1699999999 aa:bb:cc:dd:ee:ff 10.66.66.10 phone 01:aa\n", encoding="utf-8"
+    )
+    session.started_at = time.time() - 5
+    session.metrics.mark_portal_opened("s1")
+    session.metrics.mark_login_submitted("s1", entered_password=True)
+    session.metrics.mark_completed("s1")
+
+    report, text = build_session_report(session)
+    assert report["lab"]["ap_security"] == "wpa2"
+    assert report["metrics"]["passwords_entered"] == 1
+    assert report["metrics"]["completed"] == 1
+    assert len(report["clients"]) == 1
+    # The AP passphrase must never appear in the report (json or text).
+    assert "LabPass1234" not in json.dumps(report)
+    assert "LabPass1234" not in text
+
+    txt_path = save_session_report(report, text, directory=tmp_path / "reports")
+    assert txt_path.exists()
+    assert txt_path.with_suffix(".json").exists()
+    assert "LabPass1234" not in txt_path.read_text(encoding="utf-8")

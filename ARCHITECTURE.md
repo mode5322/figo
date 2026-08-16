@@ -32,6 +32,10 @@ Current product surface:
 | Blind (no on-screen reveal) | Working | Client sees a neutral sign-in then an ordinary "connected" page; the reveal is deferred to the debrief/manual report |
 | Captive portal auto pop-up | Working | Portal binds port 80 + `portal_port`; catch-all serves sign-in so OS captive assistant opens |
 | Sign-in simulation | Working | Realistic password page; value discarded on submit, only a boolean behaviour recorded |
+| Start-up hardening | Working | rfkill unblock, NM unmanage, stop `wpa_supplicant` on this iface, fail-fast AP-mode check |
+| Robust service startup | Working | hostapd/dnsmasq output captured; wait for `AP-ENABLED`; log tail shown on failure |
+| Live health + self-heal | Working | Dashboard shows AP/DHCP-DNS/Portal status + client list; portal auto-restarts on failure |
+| Session report | Working | On stop, save JSON + text report (no secrets, no AP passphrase) to `~/figo-reports/` |
 | Lab network options | Working | Gateway/DHCP presets, custom prefix/port/SSID, **AP security (open/WPA2)** |
 | Dry-run lab setup | Working | Shows hostapd/dnsmasq configs without starting AP |
 | Error handling in menus | Working | EOF/Ctrl+C, empty input, unexpected exceptions shown as panels |
@@ -166,11 +170,11 @@ Figo/
 
 | Module | Responsibility |
 |---|---|
-| `evil_twin.py` | Submenu: Wi-Fi Lab / Awareness Lab / portal config |
-| `models.py` | `LabConfig`, `PortalConfig`, SSID/channel validation, lab bins |
-| `lab_session.py` | Prepare iface, start hostapd/dnsmasq/portal, `cleanup_lab_session()` |
-| `ap.py` | Write hostapd (open **or WPA2-PSK**) + dnsmasq configs into tempfile dir |
-| `interface.py` | Snapshot operstate/mode/addrs/NM; restore after lab |
+| `evil_twin.py` | Submenu (Setup/Requirements then Run); run flow, live dashboard (health + client list), report save prompt |
+| `models.py` | `LabConfig`, `PortalConfig`, SSID/channel/passphrase validation, lab bins |
+| `lab_session.py` | Harden + prepare iface, start hostapd/dnsmasq/portal with captured logs, `ensure_services()` self-heal, `build_session_report()`/`save_session_report()`, `cleanup_lab_session()` |
+| `ap.py` | Write hostapd (open **or WPA2-PSK**) + dnsmasq configs; `parse_dhcp_leases()` client records |
+| `interface.py` | Snapshot operstate/mode/addrs/NM; restore after lab; `rfkill_unblock()`, `stop_interfering_processes()` |
 | `processes.py` | Track only Figo-started children; SIGTERM then kill |
 | `awareness/portal.py` | Local HTTP portal; binds port 80 + `portal_port`; catch-all serves sign-in; `/login` discards password value, records boolean behaviour only |
 | `awareness/session.py` | UUID-like `secrets.token_urlsafe` sessions with TTL |
@@ -344,12 +348,20 @@ ensure root + hostapd/dnsmasq/iw/ip
   → preflight (AP capability, DNS/portal ports, tools)
   → optional portal config
   → explicit Y/N confirmation (never auto-start)
-  → snapshot iface + unmanage NM
+  → snapshot iface
+  → harden: rfkill unblock, unmanage NM, stop wpa_supplicant bound to THIS iface,
+            fail fast if adapter cannot do AP mode
   → assign configured gateway/prefix
-  → hostapd (open wpa=0, or WPA2-PSK with lab passphrase) + dnsmasq DHCP/DNS
+  → hostapd (open wpa=0, or WPA2-PSK) with output captured; wait for AP-ENABLED,
+            surface hostapd log tail on failure
+  → dnsmasq DHCP/DNS with output captured; surface log tail on failure
   → awareness HTTP on gateway:80 (captive) + gateway:portal_port (mode=awareness)
-  → live Rich dashboard with behaviour log; S or Ctrl+C
-  → cleanup_lab_session()  (idempotent)
+  → live Rich dashboard: service health (AP/DHCP-DNS/Portal), connected client
+            list (ip/mac/host), behaviour log; portal auto-restarts if it dies;
+            S or Ctrl+C
+  → build_session_report() BEFORE cleanup (metrics/leases still present)
+  → cleanup_lab_session()  (idempotent; closes captured log handles)
+  → offer to save report (JSON + text, no secrets) under ~/figo-reports/
 ```
 
 Dry-run (submenu 4) builds and displays hostapd/dnsmasq configs without starting processes or changing interfaces.
@@ -420,7 +432,7 @@ python3 -m pytest
 | File | Covers |
 |---|---|
 | `tests/test_figolab.py` | SSID/channel validation, hostapd/dnsmasq generation, dependency mock, sessions, metrics credential-safety (submitted value never retained), process tracker, cleanup idempotence, config backward compatibility |
-| `tests/test_preflight_lab_upgrades.py` | Preflight/adapter probe, dry-run, WPA2 vs open hostapd, AP passphrase validation, sign-in page markup, `/login` records boolean behaviour (never the value), captive port constant |
+| `tests/test_preflight_lab_upgrades.py` | Preflight/adapter probe, dry-run, WPA2 vs open hostapd, AP passphrase validation, sign-in page markup, `/login` boolean-only recording, captive port constant, connected-page no-reveal, DHCP lease parsing, hostapd log-tail read, `stop_interfering_processes` safety, session report has no secrets |
 | `tests/test_stations.py` | airodump CSV associated-station parsing for capture summary |
 | `tests/test_gpu_info.py` | hashcat `-I` backend parse + GPU alert text for menu 7 |
 | `tests/test_ui_errors.py` | `parse_menu_index`, EOF/Ctrl+C → BackToMenu/ExitApp, `run_action` swallows unexpected errors |

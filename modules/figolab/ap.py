@@ -77,11 +77,32 @@ def _is_24ghz(channel: str) -> bool:
         return True
 
 
-def count_dhcp_leases(leases_path: Path) -> int:
+def parse_dhcp_leases(leases_path: Path) -> list[dict[str, str]]:
+    """
+    Parse a dnsmasq lease file into structured client records.
+
+    Each active line looks like:
+        <expiry-epoch> <mac> <ip> <hostname|*> <client-id|*>
+
+    Returns a list of {"mac", "ip", "hostname"} dicts (hostname "" when unknown).
+    Never raises; returns [] on any error.
+    """
+    clients: list[dict[str, str]] = []
     if not leases_path.exists():
-        return 0
+        return clients
     try:
-        lines = [ln for ln in leases_path.read_text(encoding="utf-8", errors="replace").splitlines() if ln.strip()]
-        return len(lines)
+        for line in leases_path.read_text(encoding="utf-8", errors="replace").splitlines():
+            parts = line.split()
+            if len(parts) < 3:
+                continue
+            mac = parts[1]
+            ip = parts[2]
+            hostname = parts[3] if len(parts) >= 4 and parts[3] != "*" else ""
+            clients.append({"mac": mac, "ip": ip, "hostname": hostname})
     except OSError:
-        return 0
+        return []
+    return clients
+
+
+def count_dhcp_leases(leases_path: Path) -> int:
+    return len(parse_dhcp_leases(leases_path))

@@ -148,12 +148,18 @@ Workflow (Security Awareness Lab):
 4. Review target SSID / BSSID / channel / band / security / signal / interface  
 5. Confirm portal + network settings (incl. AP security)  
 6. Explicit **Y/N** authorization confirmation (never auto-starts)  
-7. Start controlled lab AP + local portal  
+7. Start controlled lab AP + local portal — Figo first hardens the adapter (rfkill unblock, unmanage from NetworkManager, stop any `wpa_supplicant` holding *this* interface) and fails fast with a clear message if the adapter lacks AP mode  
 8. Participants connect → neutral sign-in page pops up → they submit → they see a normal "connected" page  
-9. Live Rich dashboard captures their behaviour in real time (this is what you screenshot for the report)  
+9. Live Rich dashboard captures their behaviour in real time and shows **service health (AP / DHCP-DNS / Portal)** and the **connected client list (IP · MAC · host)** — this is what you screenshot for the report. The portal auto-restarts if its HTTP server dies.  
 10. Press **S** or **Ctrl+C** to stop  
 11. Full cleanup and best-effort restore of the original interface / NetworkManager state  
-12. Debrief the participants afterwards using the report + screenshots  
+12. Figo offers to **save a session report** (JSON + text, no secrets) under `~/figo-reports/` for the debrief  
+
+### Reliability & troubleshooting
+
+- If the AP fails to start, Figo shows the tail of the actual `hostapd` output (e.g. unsupported channel, driver refuses AP mode). It confirms the AP via hostapd's `AP-ENABLED` event rather than assuming success.
+- If DHCP/DNS fails, the tail of `dnsmasq` output is shown (commonly port 53 taken by `systemd-resolved`).
+- The lab AP defaults to open; use WPA2 (menu 3) to avoid the "insecure network" warning.
 
 ## Security Awareness Lab
 
