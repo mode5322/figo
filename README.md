@@ -131,6 +131,7 @@ Run:
 
 4. Dry-run lab setup (show configs, no AP)  
 5. **Security Awareness Lab** — controlled lab AP + local sign-in portal  
+6. Preview portal page (current settings)  
 0. Back  
 
 Lab network choices:

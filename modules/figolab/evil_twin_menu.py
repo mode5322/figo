@@ -5,8 +5,11 @@ from __future__ import annotations
 import select
 import sys
 import termios
+import threading
 import time
 import tty
+import webbrowser
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Optional
 
 from rich import box
@@ -17,6 +20,7 @@ from rich.table import Table
 
 from modules.exceptions import BackToMenu, ExitApp
 from modules.ui import parse_menu_index
+from modules.figolab.awareness import portal_pages as templates
 from modules.figolab.lab_session import (
     LabError,
     build_session_report,
@@ -60,12 +64,12 @@ def action_evil_twin_lab(settings: Any, api: Any) -> None:
             table.add_row("", "[bold]Run[/bold]")
             table.add_row("4", "Dry-run lab setup (show configs, no AP)")
             table.add_row("5", "Security Awareness Lab")
+            table.add_row("6", "Preview portal page (current settings)")
             table.add_row("0", "Back")
             console.print(
                 Panel(
                     table,
                     title="Evil Twin Lab",
-                    subtitle="Authorized lab use only",
                     border_style="cyan",
                     box=box.ROUNDED,
                 )
@@ -98,8 +102,13 @@ def action_evil_twin_lab(settings: Any, api: Any) -> None:
                     run("Security Awareness Lab", _run_lab_flow, settings, api, mode="awareness")
                 else:
                     _run_lab_flow(settings, api, mode="awareness")
+            elif choice == "6":
+                if run:
+                    run("Preview portal page", _preview_portal_page, settings, api)
+                else:
+                    _preview_portal_page(settings, api)
             else:
-                api.warn_and_back("Unknown option", "Enter 0–5.")
+                api.warn_and_back("Unknown option", "Enter 0–6.")
         except BackToMenu:
             return
         except ExitApp:
@@ -339,6 +348,134 @@ def _show_preflight(settings: Any, api: Any) -> None:
         )
     )
     api.pause()
+
+
+def _preview_ssid(settings: Any) -> str:
+    network = _lab_network_from_settings(settings)
+    ap_ssid = (network.get("ap_ssid") or "").strip()
+    if ap_ssid:
+        return ap_ssid
+    target = getattr(settings, "target", None)
+    ssid = (getattr(target, "ssid", "") or "").strip()
+    return ssid or "Example-WiFi"
+
+
+def _preview_portal_page(settings: Any, api: Any) -> None:
+    """Serve the employee-facing portal page locally with current settings."""
+    portal = _portal_from_settings(settings)
+    network = _lab_network_from_settings(settings)
+    ssid = _preview_ssid(settings)
+
+    class _PreviewConfig:
+        portal = portal
+
+        def effective_ssid(self) -> str:
+            return ssid
+
+    cfg = _PreviewConfig()
+    ctx = templates.render_context(cfg)
+
+    def landing_html() -> str:
+        if ctx.get("require_login", True):
+            return templates.login_page(
+                ssid=ctx["ssid"],
+                title=ctx["title"],
+                organization=ctx["organization"],
+                password_label=ctx["password_label"],
+                button_label=ctx["button_label"],
+            )
+        return templates.landing_page(
+            ssid=ctx["ssid"],
+            title=ctx["title"],
+            organization=ctx["organization"],
+            training_message=ctx["training_message"],
+            contact=ctx["contact"],
+        )
+
+    def connected_html() -> str:
+        return templates.connected_page(
+            ssid=ctx["ssid"],
+            title=ctx["title"],
+            organization=ctx["organization"],
+        )
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, fmt: str, *args) -> None:  # noqa: A003
+            return
+
+        def _send(self, code: int, body: str) -> None:
+            data = body.encode("utf-8")
+            self.send_response(code)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(data)
+
+        def do_GET(self) -> None:  # noqa: N802
+            if self.path.split("?", 1)[0].startswith("/health"):
+                self._send(200, "ok")
+                return
+            self._send(200, landing_html())
+
+        def do_POST(self) -> None:  # noqa: N802
+            length = int(self.headers.get("Content-Length", "0") or 0)
+            length = min(max(length, 0), 4096)
+            if length:
+                self.rfile.read(length)
+            self._send(200, connected_html())
+
+    preferred = int(network.get("portal_port") or 8080)
+    httpd: Optional[ThreadingHTTPServer] = None
+    bound_port = 0
+    for port in (preferred, 8765, 0):
+        try:
+            httpd = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+            bound_port = httpd.server_address[1]
+            break
+        except OSError:
+            httpd = None
+            continue
+    if httpd is None:
+        api.warn_and_back("Preview failed", "Could not bind a local preview port.")
+        return
+
+    thread = threading.Thread(target=httpd.serve_forever, name="figo-portal-preview", daemon=True)
+    thread.start()
+    url = f"http://127.0.0.1:{bound_port}/"
+    api.clear_screen()
+    console.print(
+        Panel(
+            f"SSID        : {ssid}\n"
+            f"Portal title: {ctx['title']}\n"
+            f"Organization: {ctx['organization'] or '-'}\n"
+            f"Sign-in page: {'Yes' if ctx.get('require_login', True) else 'No'}\n"
+            f"URL         : {url}\n\n"
+            "Open this URL in a browser to view the employee page.\n"
+            "Submit the form to preview the connected page.\n"
+            "Press Enter here to stop the preview.",
+            title="Portal page preview",
+            border_style="cyan",
+            box=box.ROUNDED,
+        )
+    )
+    try:
+        webbrowser.open(url)
+    except Exception:
+        pass
+    try:
+        api.pause("Press Enter to stop preview...")
+    finally:
+        try:
+            httpd.shutdown()
+        except Exception:
+            pass
+        try:
+            httpd.server_close()
+        except Exception:
+            pass
+        console.print("[green]Preview stopped.[/green]")
+        api.pause()
 
 
 def _dry_run_lab(settings: Any, api: Any) -> None:

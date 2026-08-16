@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-08-16  
 **Repo:** https://github.com/mode5322/Figo  
-**Branch reviewed:** `cursor/responsive-admin-portal-e15f`  
+**Branch reviewed:** `cursor/preview-portal-page-e15f`  
 **Python LOC (app + tests):** ~4800+
 
 This file is the source of truth for how Figo is structured. Update it in the same change whenever code, menus, config, safety rules, or layout change.
@@ -205,6 +205,7 @@ Evil Twin submenu (8):
   Run
   4  Dry-run lab setup (show configs, no AP)
   5  Security Awareness Lab (open/WPA2 AP + captive sign-in portal)
+  6  Preview portal page (current settings)
   0  Back
 ```
 
@@ -322,6 +323,7 @@ Submenu:
   Run
   4  Dry-run lab setup
   5  Security Awareness Lab
+  6  Preview portal page (current settings)
   0  Back
 ```
 
