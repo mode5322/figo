@@ -1,11 +1,12 @@
 # Figo — Architecture
 
-**Last updated:** 2026-08-15  
-**Repo:** https://github.com/mode5322/Figo  
-**Branch reviewed:** `main` (fed03a6)  
-**Python LOC (app + tests):** ~4800+
+**Last updated:** 2026-08-16  
+**Repo:** https://github.com/mode5322/figo  
+**Branch reviewed:** `cursor/readme-usage-guide-5a26`
 
 This file is the source of truth for how Figo is structured. Update it in the same change whenever code, menus, config, safety rules, or layout change.
+
+**Docs split:** `README.md` is a **usage guide only** (install, menus, workflows, config path, troubleshooting, safety). Module trees, data flows, and implementation detail live here — not in the README. When user-facing behaviour changes, update the README in the same change.
 
 ---
 
@@ -92,8 +93,8 @@ Figo/
 ├── figo                      # launcher (runpy → figo.py)
 ├── figo.py                   # thin entry (sys.path + modules.cli.main)
 ├── install.sh                # symlink installer / uninstall
-├── README.md                 # user docs
-├── ARCHITECTURE.md           # this file
+├── README.md                 # usage guide only (not a module map)
+├── ARCHITECTURE.md           # this file (structure + internals)
 ├── requirements.txt          # rich>=13
 ├── .gitignore
 ├── .cursor/rules/architecture.mdc
