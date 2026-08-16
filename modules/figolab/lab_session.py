@@ -464,17 +464,32 @@ def dry_run_lab_configs(config: LabConfig) -> tuple[str, str, str]:
 
 def build_session_report(session: LabSession) -> tuple[dict, str]:
     """
-    Build a shareable session report (dict + human-readable text) for the
-    manual debrief. Contains only non-sensitive assessment data — never any
+    Build a shareable official session report (dict + human-readable text) for
+    the manual debrief. Contains only non-sensitive assessment data — never any
     submitted value, and never the AP passphrase. Call this BEFORE cleanup,
     because cleanup clears live metrics and lease files.
     """
     config = session.config
+    portal = config.portal
     snap = session.metrics.snapshot()
     clients = session.recent_clients(limit=100)
+    # Per-participant behavioural findings (booleans only — no secrets).
+    findings = []
+    for item in snap.get("sessions", []):
+        findings.append(
+            {
+                "session_id": str(item.get("session_id", ""))[:12],
+                "viewed_login": bool(item.get("viewed_login")),
+                "submitted_login": bool(item.get("submitted_login")),
+                "entered_password": bool(item.get("entered_password")),
+                "completed": bool(item.get("completed")),
+            }
+        )
+    passwords_entered = int(snap.get("passwords_entered", 0) or 0)
     report = {
         "generated_at": utc_now_iso(),
         "runtime_sec": session.runtime_sec(),
+        "report_type": "security_awareness_official",
         "lab": {
             "ssid": config.effective_ssid(),
             "channel": str(config.channel),
@@ -484,60 +499,140 @@ def build_session_report(session: LabSession) -> tuple[dict, str]:
             "dhcp_range": f"{config.dhcp_range_start}-{config.dhcp_range_end}",
             "portal_ports": [80, int(config.portal_port)],
         },
+        "portal": {
+            "organization": portal.organization or "",
+            "portal_title": portal.portal_title or "",
+            "security_contact": portal.security_contact or "",
+            "educational_message": portal.educational_message or "",
+            "sign_in_page": "password_only" if portal.require_login else "prompt_only",
+            "password_field_required": False,
+            "password_field_label": portal.login_password_label or "",
+        },
         "metrics": {
             "connected_devices": snap["connected_devices"],
             "portal_visits": snap["portal_visits"],
             "login_submissions": snap["login_submissions"],
-            "passwords_entered": snap["passwords_entered"],
+            "passwords_entered": passwords_entered,
             "interactions": snap["interactions"],
             "completed": snap["completed"],
         },
+        "findings": findings,
         "clients": clients,
         "events": snap.get("events", []),
     }
     # Defence in depth: make sure nothing sensitive slipped into the payload.
     assert_no_sensitive_payload(report["lab"])
     assert_no_sensitive_payload(report["metrics"])
+    for row in findings:
+        assert_no_sensitive_payload(row)
 
     m = report["metrics"]
     lines = [
-        "FIGO SECURITY AWARENESS — SESSION REPORT",
-        "=" * 42,
+        "FIGO SECURITY AWARENESS — OFFICIAL SESSION REPORT",
+        "=" * 48,
         f"Generated : {report['generated_at']}",
         f"Runtime   : {report['runtime_sec']}s",
+        f"Org       : {report['portal']['organization'] or '-'}",
+        f"Contact   : {report['portal']['security_contact'] or '-'}",
         "",
+        "LAB",
+        "-" * 48,
         f"SSID      : {report['lab']['ssid']}",
         f"Channel   : {report['lab']['channel']} ({report['lab']['band']})",
         f"AP secure : {report['lab']['ap_security']}",
         f"Gateway   : {report['lab']['gateway']}",
+        f"Sign-in   : password-only field (optional, value never stored)"
+        if report["portal"]["sign_in_page"] == "password_only"
+        else "Sign-in   : behavioural prompt only",
         "",
         "RESULTS",
-        "-" * 42,
+        "-" * 48,
         f"Connected devices  : {m['connected_devices']}",
         f"Portal visits      : {m['portal_visits']}",
         f"Sign-in submissions: {m['login_submissions']}",
-        f"Passwords entered  : {m['passwords_entered']}   (values never stored)",
+        f"Passwords entered  : {m['passwords_entered']}   (boolean only — values never stored)",
         f"Interactions       : {m['interactions']}",
         f"Completed          : {m['completed']}",
         "",
-        "CONNECTED CLIENTS",
-        "-" * 42,
+        "FINDINGS (per participant session)",
+        "-" * 48,
     ]
+    if findings:
+        for row in findings:
+            pwd = "YES — typed into password field" if row["entered_password"] else "no"
+            lines.append(
+                f"  {row['session_id']:<12}  viewed={row['viewed_login']}  "
+                f"submitted={row['submitted_login']}  password_entered={pwd}"
+            )
+    else:
+        lines.append("  (no portal sessions recorded)")
+
+    if passwords_entered:
+        lines += [
+            "",
+            "⚠ PASSWORD FIELD USED",
+            "-" * 48,
+            f"{passwords_entered} participant(s) typed into the unexpected Wi-Fi",
+            "password field. In a real attack that credential could have been stolen.",
+            "Figo did NOT store, log, hash, or transmit any password value.",
+        ]
+
+    edu = (report["portal"]["educational_message"] or "").strip()
+    lines += ["", "DEBRIEF / EDUCATIONAL MESSAGE", "-" * 48]
+    if edu:
+        lines.extend(edu.splitlines())
+    else:
+        lines.append("  (no educational message configured)")
+
+    lines += ["", "CONNECTED CLIENTS", "-" * 48]
     if clients:
         for c in clients:
             host = c.get("hostname") or "-"
             lines.append(f"  {c.get('mac', '?'):<18} {c.get('ip', '?'):<15} {host}")
     else:
         lines.append("  (none recorded)")
-    lines += ["", "EVENT LOG", "-" * 42]
+    lines += ["", "EVENT LOG", "-" * 48]
     for ev in report["events"]:
         lines.append(f"  {ev.get('ts', '')}  {ev.get('kind', '')}: {ev.get('message', '')}")
     text = "\n".join(lines) + "\n"
     return report, text
 
 
+def build_official_report_html(report: dict) -> str:
+    """HTML debrief document for the official awareness report (no secrets)."""
+    from modules.figolab.awareness import portal_pages
+
+    portal = report.get("portal", {})
+    metrics = report.get("metrics", {})
+    findings = report.get("findings", [])
+    behaviors: list[str] = [
+        f"Connected devices: {metrics.get('connected_devices', 0)}",
+        f"Portal visits: {metrics.get('portal_visits', 0)}",
+        f"Sign-in submissions: {metrics.get('login_submissions', 0)}",
+        f"Password field used: {metrics.get('passwords_entered', 0)} "
+        "(values never stored)",
+    ]
+    for row in findings:
+        sid = row.get("session_id", "?")
+        if row.get("entered_password"):
+            behaviors.append(f"Session {sid}: typed into the password field")
+        elif row.get("submitted_login"):
+            behaviors.append(f"Session {sid}: submitted sign-in without a password")
+        elif row.get("viewed_login"):
+            behaviors.append(f"Session {sid}: opened the sign-in page")
+
+    return portal_pages.result_page(
+        title=portal.get("portal_title") or "Security Awareness Report",
+        organization=portal.get("organization") or "",
+        educational_message=portal.get("educational_message") or "",
+        contact=portal.get("security_contact") or "",
+        behaviors=behaviors,
+        entered_password=bool(int(metrics.get("passwords_entered", 0) or 0)),
+    )
+
+
 def save_session_report(report: dict, text: str, *, directory: Optional[Path] = None) -> Path:
-    """Write the report as timestamped .json + .txt; returns the .txt path."""
+    """Write the official report as .json + .txt + .html; returns the .txt path."""
     import json
 
     directory = directory or (Path.home() / "figo-reports")
@@ -546,6 +641,8 @@ def save_session_report(report: dict, text: str, *, directory: Optional[Path] = 
     base = directory / f"awareness-{stamp}"
     json_path = base.with_suffix(".json")
     txt_path = base.with_suffix(".txt")
+    html_path = base.with_suffix(".html")
     json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     txt_path.write_text(text, encoding="utf-8")
+    html_path.write_text(build_official_report_html(report), encoding="utf-8")
     return txt_path

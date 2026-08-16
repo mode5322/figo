@@ -163,7 +163,10 @@ Workflow (Security Awareness Lab):
 9. Live Rich dashboard captures their behaviour in real time and shows **service health (AP / DHCP-DNS / Portal)** and the **connected client list (IP · MAC · host)** — this is what you screenshot for the report. The portal auto-restarts if its HTTP server dies.  
 10. Press **S** or **Ctrl+C** to stop  
 11. Full cleanup and best-effort restore of the original interface / NetworkManager state  
-12. Figo offers to **save a session report** (JSON + text, no secrets) under `~/figo-reports/` for the debrief  
+12. Figo offers to **save an official session report** under `~/figo-reports/` for the debrief:  
+    - `.txt` — human-readable official report (results, password-field findings, educational message)  
+    - `.json` — same data structured  
+    - `.html` — official debrief page (includes password-field warning when used; **never** stores the value)
 
 ### Reliability & troubleshooting
 
@@ -199,7 +202,7 @@ Non-sensitive metrics only, for example:
 
 ### Sign-in simulation (password field)
 
-To realistically measure behaviour, the portal shows a **neutral sign-in page with a password field** (enable/disable via *Configure awareness portal → Show a sign-in page*). This simulates an employee logging in on an unexpected Wi-Fi page. When the form is submitted:
+To realistically measure behaviour, the portal shows a **neutral sign-in page with a single optional password field** (no username; enable/disable via *Configure awareness portal → Show a sign-in page*). Empty submit is allowed. When the form is submitted:
 
 1. The server reads the password field **only** to compute a single boolean (was it non-empty?), then **immediately discards** the value. It is never stored, logged, hashed, or transmitted.
 2. The participant is shown an ordinary **"You are connected"** confirmation. The page does **not** reveal that this was a simulation — the reveal is intentionally deferred to the debrief / manual report so employees cannot detect the test from the page itself.

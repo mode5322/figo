@@ -651,6 +651,7 @@ def _maybe_save_report(report, api: Any) -> None:
         return
     console.print(f"[green]Report saved:[/green] {path}")
     console.print(f"[dim]JSON:[/dim] {path.with_suffix('.json')}")
+    console.print(f"[dim]HTML (official debrief):[/dim] {path.with_suffix('.html')}")
 
 
 def _health(label: str, ok: bool, *, disabled: bool = False) -> str:
