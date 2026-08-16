@@ -13,11 +13,8 @@ server. To make the sign-in page pop up automatically we:
 * answer *every* request with the portal page (instead of the "Success" body
   the OS expects), which triggers the captive-portal assistant on the client.
 
-Credential safety
------------------
 The sign-in form posts to ``/login``. The submitted password is read only to
-compute a single boolean (was the field non-empty?) and is then discarded. It
-is never stored, logged, hashed, or transmitted anywhere.
+compute a single boolean (was the field non-empty?) and is then discarded.
 """
 
 from __future__ import annotations
@@ -63,14 +60,7 @@ class AwarenessPortal:
         return f"http://{host}:{port}/"
 
     def _result_body(self, client_session) -> str:
-        """
-        Realistic post–sign-in confirmation shown to the participant.
-
-        The educational reveal is intentionally NOT shown here — it is delivered
-        later during the debrief / manual report using the live dashboard
-        screenshots and the configured ``educational_message``. On-screen the
-        participant only sees an ordinary "connected" page.
-        """
+        """Post–sign-in confirmation page."""
         ctx = templates.render_context(self.config)
         return templates.connected_page(
             ssid=ctx["ssid"],

@@ -65,7 +65,6 @@ def action_evil_twin_lab(settings: Any, api: Any) -> None:
                 Panel(
                     table,
                     title="Evil Twin Lab",
-                    subtitle="Authorized lab use only",
                     border_style="cyan",
                     box=box.ROUNDED,
                 )
@@ -128,12 +127,12 @@ def _configure_portal(settings: Any, api: Any) -> None:
         api.ask("Educational message", default=portal.educational_message) or portal.educational_message
     )
     training_value = api.ask(
-        "Optional fake training value (never a real password)",
+        "Optional fake training value",
         default=portal.training_value,
     )
     logo = api.ask("Logo path (optional)", default=portal.logo_path) or portal.logo_path
     require_login = api.confirm(
-        "Show a sign-in page with a password field? (value is never stored)",
+        "Show a sign-in page with a password field?",
         default=portal.require_login,
     )
     username_label = portal.login_username_label
@@ -174,7 +173,6 @@ def _configure_portal(settings: Any, api: Any) -> None:
         api.warn_and_back("Could not save settings", str(exc))
         return
     console.print("\n[green]Portal configuration saved.[/green]")
-    console.print("[dim]Real passwords are never collected or stored.[/dim]")
     api.pause()
 
 
@@ -424,7 +422,7 @@ def _pick_target(settings: Any, api: Any) -> Optional[dict[str, str]]:
             row["security"],
             settings.interface,
         )
-    console.print(Panel(table, title=f"Authorized target selection · {settings.interface}", border_style="green"))
+    console.print(Panel(table, title=f"Target selection · {settings.interface}", border_style="green"))
     choice = api.ask("Target number (Enter to go back)")
     index = parse_menu_index(choice, max_index=len(rows))
     if index is None:
@@ -477,7 +475,7 @@ def _build_lab_config(settings: Any, row: dict[str, str], mode: str) -> LabConfi
 def _confirm_start(config: LabConfig, api: Any) -> bool:
     ap_sec = "WPA2 (secured / padlock)" if config.is_secured() else "open (clients warn: insecure)"
     login = (
-        "Sign-in page shown (password NEVER stored)"
+        "Sign-in page shown"
         if config.portal_enabled and config.portal.require_login
         else ("Awareness prompt only" if config.portal_enabled else "Disabled")
     )
@@ -490,13 +488,10 @@ def _confirm_start(config: LabConfig, api: Any) -> bool:
         f"Gateway IP  : {config.gateway_ip}/{config.subnet_prefix}\n"
         f"DHCP range  : {config.dhcp_range_start} – {config.dhcp_range_end}\n"
         f"Portal      : {'Enabled' if config.portal_enabled else 'Disabled'} · captive :80 + :{config.portal_port}\n"
-        f"Sign-in     : {login}\n"
-        f"{'─' * 38}\n"
-        "This is an authorized security lab.\n"
-        "No real passwords will be collected or stored."
+        f"Sign-in     : {login}"
     )
     console.print(Panel(body, title="EVIL TWIN LAB", border_style="yellow", box=box.ROUNDED))
-    return api.confirm("Start assessment?", default=False)
+    return api.confirm("Start?", default=False)
 
 
 def _run_lab_flow(settings: Any, api: Any, *, mode: str) -> None:
@@ -575,7 +570,7 @@ def _run_lab_flow(settings: Any, api: Any, *, mode: str) -> None:
                 f"Organization : {config.portal.organization or '-'}\n"
                 f"Portal title : {config.portal.portal_title}\n"
                 f"Contact      : {config.portal.security_contact or '-'}\n"
-                f"Sign-in page : {'Yes (password never stored)' if config.portal.require_login else 'No (prompt only)'}\n"
+                f"Sign-in page : {'Yes' if config.portal.require_login else 'No (prompt only)'}\n"
                 f"Portal port  : {config.portal_port} (+ captive :80)",
                 title="Awareness portal configuration",
                 border_style="cyan",
@@ -587,7 +582,7 @@ def _run_lab_flow(settings: Any, api: Any, *, mode: str) -> None:
 
     api.clear_screen()
     if not _confirm_start(config, api):
-        console.print("[dim]Assessment cancelled.[/dim]")
+        console.print("[dim]Cancelled.[/dim]")
         api.pause()
         return
 
@@ -615,7 +610,7 @@ def _run_lab_flow(settings: Any, api: Any, *, mode: str) -> None:
         _maybe_save_report(report, api)
         raise
     except KeyboardInterrupt:
-        console.print("\n[yellow]Stopping assessment...[/yellow]")
+        console.print("\n[yellow]Stopping...[/yellow]")
         if session is not None and report is None:
             try:
                 report = build_session_report(session)
@@ -629,7 +624,7 @@ def _run_lab_flow(settings: Any, api: Any, *, mode: str) -> None:
 
 
 def _maybe_save_report(report, api: Any) -> None:
-    """Offer to persist a non-sensitive session report for the manual debrief."""
+    """Offer to persist a session report."""
     if not report:
         return
     report_data, report_text = report
@@ -645,7 +640,7 @@ def _maybe_save_report(report, api: Any) -> None:
         )
     )
     try:
-        if not api.confirm("Save a session report file for the debrief?", default=True):
+        if not api.confirm("Save a session report file?", default=True):
             return
     except (BackToMenu, ExitApp):
         return
@@ -712,7 +707,7 @@ def _dashboard_renderable(session) -> Panel:
     return Panel(
         body,
         title="SECURITY AWARENESS LAB",
-        subtitle="[S] Stop Assessment  ·  Ctrl+C",
+        subtitle="[S] Stop  ·  Ctrl+C",
         border_style="green" if all_ok else "yellow",
         box=box.ROUNDED,
     )

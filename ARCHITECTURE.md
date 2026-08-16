@@ -1,8 +1,8 @@
 # Figo — Architecture
 
-**Last updated:** 2026-08-15  
+**Last updated:** 2026-08-16  
 **Repo:** https://github.com/mode5322/Figo  
-**Branch reviewed:** `main` (fed03a6)  
+**Branch reviewed:** `cursor/remove-ethics-text-e15f`  
 **Python LOC (app + tests):** ~4800+
 
 This file is the source of truth for how Figo is structured. Update it in the same change whenever code, menus, config, safety rules, or layout change.
@@ -11,7 +11,7 @@ This file is the source of truth for how Figo is structured. Update it in the sa
 
 ## 1. What Figo is (current status)
 
-Figo is a **terminal-based Wi-Fi security testing toolkit** for **authorized lab environments**.
+Figo is a **terminal-based Wi-Fi security testing toolkit**.
 
 It is **not** a GUI app, **not** a background daemon, and **not** a network-wide C2/phishing platform.
 
@@ -29,7 +29,7 @@ Current product surface:
 | Offline crack (CPU) | Working | `aircrack-ng` (default engine) |
 | Offline crack (GPU) | Optional | `hashcat` if backend already works; **warning only — no driver install** |
 | Security Awareness Lab | Implemented | Lab AP (`hostapd`+`dnsmasq`, open **or WPA2**) + captive portal + sign-in simulation + live behaviour log; **no real password collection** |
-| Blind (no on-screen reveal) | Working | Client sees a neutral sign-in then an ordinary "connected" page; the reveal is deferred to the debrief/manual report |
+| Blind (no on-screen reveal) | Working | Client sees a neutral sign-in then an ordinary "connected" page |
 | Captive portal auto pop-up | Working | Portal binds port 80 + `portal_port`; catch-all serves sign-in so OS captive assistant opens |
 | Sign-in simulation | Working | Realistic password page; value discarded on submit, only a boolean behaviour recorded |
 | Start-up hardening | Working | rfkill unblock, NM unmanage, stop `wpa_supplicant` on this iface, fail-fast AP-mode check |
@@ -40,15 +40,6 @@ Current product surface:
 | Dry-run lab setup | Working | Shows hostapd/dnsmasq configs without starting AP |
 | Error handling in menus | Working | EOF/Ctrl+C, empty input, unexpected exceptions shown as panels |
 | Hardware-in-the-loop tests | Not in CI | Unit tests mock subprocesses; no real Wi-Fi adapter in this environment |
-
-**Safety boundary (must stay true):**
-
-- No credential harvesting, forwarding, hashing-and-retaining of real passwords
-- No cookie/token/browser-credential theft
-- No external exfiltration
-- Awareness portal measures **behavior**, not secrets
-- The client-facing portal may run "blind" (no on-screen reveal) so it matches a real Evil Twin; this is a process choice for authorized assessments and does **not** change credential handling — submitted passwords are still discarded immediately and never stored. The reveal is delivered in an authorized debrief/report.
-- Figo never installs proprietary GPU drivers
 
 ---
 
@@ -235,10 +226,10 @@ Evil Twin end-to-end.
   "portal": {
     "enabled": true,
     "organization": "",
-    "portal_title": "SECURITY AWARENESS TEST",
+    "portal_title": "Wi-Fi Authentication",
     "training_message": "...",
     "security_contact": "",
-    "educational_message": "...",
+    "educational_message": "",
     "training_value": "",
     "logo_path": "",
     "session_ttl_sec": 3600,
@@ -337,7 +328,7 @@ Lab network presets (saved under `lab_network` in config.json):
 ```text
 ensure root + hostapd/dnsmasq/iw/ip
   → scan (reuse modules.network.scan_networks)
-  → pick authorized target
+  → pick target
   → confirm / configure lab network (gateway + DHCP + port + SSID + security)
   → preflight (AP capability, DNS/portal ports, tools)
   → optional portal config
@@ -364,9 +355,9 @@ Live dashboard events (non-sensitive): client connect/leave, portal open, sign-i
 
 **Captive portal:** the portal binds port 80 (OS captive-portal probes) plus `portal_port`, and its catch-all handler answers every request with the sign-in page, so the assistant opens automatically on clients. dnsmasq points all DNS at the gateway.
 
-**Sign-in simulation (blind):** when `portal.require_login` is true (default), the landing page is a neutral, realistic password form posting to `/login`. The handler reads the password field only to compute `entered_password` (a boolean) and discards the value immediately — it is never stored, logged, hashed, or transmitted. The client is then shown an ordinary "You are connected" page (`templates.connected_page`) that does **not** reveal the simulation. The reveal is deferred to the debrief/manual report, using the operator's live-dashboard screenshots and the configured `educational_message`. `templates.result_page` (which lists behaviours and the reveal) is retained for report/debrief use and is not served to clients.
+**Sign-in simulation (blind):** when `portal.require_login` is true (default), the landing page is a neutral, realistic password form posting to `/login`. The handler reads the password field only to compute `entered_password` (a boolean) and discards the value immediately — it is never stored, logged, hashed, or transmitted. The client is then shown an ordinary "You are connected" page (`templates.connected_page`). `templates.result_page` is retained for report use and is not served to clients.
 
-**AP security:** the lab AP defaults to open (`wpa=0`) but can be WPA2-PSK using an admin-set lab passphrase (the AP's own key, shared with participants — never a harvested credential) to avoid the client "insecure network" warning.
+**AP security:** the lab AP defaults to open (`wpa=0`) but can be WPA2-PSK using an admin-set lab passphrase to avoid the client "insecure network" warning.
 
 `192.168.1.1` may conflict with real home routers; `10.66.66.1` remains the recommended default.
 

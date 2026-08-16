@@ -228,25 +228,12 @@ def validate_ap_passphrase(passphrase: str) -> tuple[bool, str]:
 class PortalConfig:
     enabled: bool = True
     organization: str = ""
-    # Client-facing title. Kept neutral on purpose so the sign-in page looks
-    # like a real network portal — the participant should not realise it is a
-    # simulation until the debrief / manual report.
     portal_title: str = "Wi-Fi Authentication"
     training_message: str = (
         "Please sign in with your network account to continue."
     )
     security_contact: str = ""
-    educational_message: str = (
-        "This was a controlled security-awareness simulation.\n"
-        "The Wi-Fi network you connected to was part of an authorized security assessment.\n\n"
-        "Important warning signs include:\n"
-        "• Unexpected duplicate Wi-Fi networks\n"
-        "• Suspicious login pages\n"
-        "• Unexpected requests for credentials\n"
-        "• Unusual network behavior\n\n"
-        "Never enter your real password into an unexpected Wi-Fi authentication page.\n"
-        "If you encounter a suspicious network, disconnect and contact your IT/security team."
-    )
+    educational_message: str = ""
     training_value: str = ""
     logo_path: str = ""
     session_ttl_sec: int = 3600
@@ -311,7 +298,7 @@ class LabConfig:
     subnet_prefix: int = 24
     portal_port: int = 8080
     # Lab AP link-layer security. "open" (default) or "wpa2" with a lab
-    # passphrase the admin sets and shares with authorized participants.
+    # passphrase.
     ap_security: str = "open"
     ap_passphrase: str = ""
 

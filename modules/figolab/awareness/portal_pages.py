@@ -74,9 +74,6 @@ def landing_page(*, ssid: str, title: str, organization: str, training_message: 
       <input type="hidden" name="action" value="continue"/>
       <button class="secondary" type="submit">Continue</button>
     </form>
-    <p class="muted" style="margin-top:16px">
-      This portal never asks for or stores your real password.
-    </p>
   </div>
 </body>
 </html>
@@ -92,12 +89,7 @@ def login_page(
     password_label: str = "Wi-Fi / Network password",
     button_label: str = "Sign in",
 ) -> str:
-    """
-    A realistic-looking Wi-Fi/network sign-in page used only for the awareness
-    simulation. IMPORTANT: the form is posted to /login and the submitted
-    password is discarded immediately by the server — it is never stored,
-    logged, or transmitted anywhere. See portal_server.py do_POST.
-    """
+    """Realistic Wi-Fi/network sign-in page. Form posts to /login."""
     org = f"<p class='muted'>{_e(organization)}</p>" if organization else ""
     heading = _e(organization or title)
     return f"""<!DOCTYPE html>
@@ -160,18 +152,7 @@ def login_page(
 
 
 def connected_page(*, ssid: str, title: str, organization: str) -> str:
-    """
-    Realistic captive-portal "you are connected" confirmation shown AFTER the
-    participant signs in.
-
-    It deliberately does NOT reveal that this was a security-awareness
-    simulation: the reveal happens later, during the debrief / manual report
-    (with screenshots from the live dashboard). The employee should only learn
-    it was a test from their security team, not from this page.
-
-    (Credential safety is unaffected: the submitted password was already
-    discarded server-side before this page is rendered.)
-    """
+    """Captive-portal connected confirmation shown after sign-in."""
     org = f"<p class='muted'>{_e(organization)}</p>" if organization else ""
     net = f"<div class='ssid'>{_e(ssid)}</div>" if ssid else ""
     return f"""<!DOCTYPE html>
@@ -240,9 +221,9 @@ body{{margin:0;min-height:100vh;display:grid;place-items:center;font-family:Sego
 .muted{{color:#9aa7b5}} button{{width:100%;border:0;border-radius:10px;padding:12px;background:#3d8bfd;color:#fff;font-weight:600}}
 </style></head><body><div class="card">
 <h1>{_e(title)}</h1>
-<p class="muted">No real passwords are collected. Interaction only.</p>
+<p class="muted">Interaction only.</p>
 {field}
-<form method="get" action="/result"><button type="submit">Show educational result</button></form>
+<form method="get" action="/result"><button type="submit">Show result</button></form>
 </div></body></html>
 """
 
@@ -268,13 +249,6 @@ def result_page(
             "<div class='behaviors'><p class='bh'>What you just did:</p>"
             f"<ul>{items}</ul></div>"
         )
-    alert_html = ""
-    if entered_password:
-        alert_html = (
-            "<div class='alert'>&#9888; You entered a password into an unexpected "
-            "Wi-Fi sign-in page. In a real attack, that password could have been "
-            "stolen.<br/><strong>Your input was NOT stored or transmitted.</strong></div>"
-        )
     return f"""<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>{_e(title)}</title>
@@ -282,15 +256,12 @@ def result_page(
 body{{margin:0;min-height:100vh;display:grid;place-items:center;font-family:Segoe UI,system-ui,sans-serif;background:#0f1419;color:#e8eef5}}
 .card{{width:min(560px,92vw);background:#1a222c;border:1px solid #2b3642;border-radius:14px;padding:28px 24px;line-height:1.55}}
 h1{{margin-top:0;font-size:1.2rem}} .ok{{color:#3dd68c}}
-.alert{{margin:14px 0;padding:12px 14px;border-radius:10px;background:#3a1c1c;border:1px solid #6b2b2b;color:#ffb4b4}}
 .behaviors{{margin:14px 0;padding:12px 14px;border-radius:10px;background:#111820;border:1px solid #2b3642}}
 .behaviors .bh{{margin:0 0 6px;color:#9aa7b5;font-size:.9rem}}
 .behaviors ul{{margin:0;padding-left:20px}} .behaviors li{{margin:3px 0}}
 </style></head><body><div class="card">
 <h1>{_e(title)}</h1>
 {org}
-<p class="ok">This was a controlled security-awareness simulation.</p>
-{alert_html}
 {behavior_html}
 <p>{message}</p>
 {contact_html}
@@ -304,7 +275,7 @@ def render_context(config: Any) -> dict[str, Any]:
         "ssid": getattr(config, "effective_ssid", lambda: "")()
         if callable(getattr(config, "effective_ssid", None))
         else getattr(config, "target_ssid", ""),
-        "title": getattr(portal, "portal_title", "SECURITY AWARENESS TEST") if portal else "SECURITY AWARENESS TEST",
+        "title": getattr(portal, "portal_title", "Wi-Fi Authentication") if portal else "Wi-Fi Authentication",
         "organization": getattr(portal, "organization", "") if portal else "",
         "training_message": getattr(portal, "training_message", "") if portal else "",
         "contact": getattr(portal, "security_contact", "") if portal else "",

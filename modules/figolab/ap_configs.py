@@ -17,10 +17,7 @@ def build_hostapd_conf(config: "LabConfig", conf_path: Path) -> Path:
 
     * ``open`` (default) — no passphrase. Simplest to join, but clients show an
       "insecure / open network" warning.
-    * ``wpa2`` — WPA2-PSK using a lab passphrase the administrator sets and
-      shares with authorized participants. This makes the network appear
-      "secured" (padlock) and more credible for the awareness assessment. The
-      passphrase is the lab AP's OWN key — it is never a harvested credential.
+    * ``wpa2`` — WPA2-PSK using a lab passphrase.
     """
     iface = config.ap_interface or config.interface
     ssid = config.effective_ssid()

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""figo— A terminal-based Wi-Fi security testing toolkit for authorized lab environments."""
+"""figo— A terminal-based Wi-Fi security testing toolkit."""
 
 from __future__ import annotations
 

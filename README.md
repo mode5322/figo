@@ -1,8 +1,6 @@
 # Figo
 
-figo— A terminal-based Wi-Fi security testing toolkit for authorized lab environments.
-
-Use only on networks you own or have explicit written permission to test.
+figo— A terminal-based Wi-Fi security testing toolkit.
 
 ## Project layout
 
@@ -138,15 +136,15 @@ Lab network choices:
 - **Default:** `10.66.66.1` with DHCP `10.66.66.10`–`10.66.66.100` (recommended)
 - **Home-style:** `192.168.1.1` with DHCP `192.168.1.10`–`192.168.1.100` (may conflict with real routers)
 - **Customize:** gateway, DHCP range, subnet prefix, portal port, optional lab SSID (training variant)
-- **AP security:** **open** (default) or **WPA2** with a lab passphrase you set and share with participants. WPA2 shows a padlock and removes the client "insecure / open network" warning, making the assessment more credible. The passphrase is the lab AP's own key — it is never a harvested credential.
+- **AP security:** **open** (default) or **WPA2** with a lab passphrase. WPA2 shows a padlock and removes the client "insecure / open network" warning.
 
 Saved under `lab_network` in `~/.config/figo/config.json`. When starting a lab, Figo asks to confirm or change the addressing before launch, then runs a preflight check.
 
 **Captive portal (auto pop-up):** the awareness portal listens on port **80** (where phones/laptops send captive-portal probes) in addition to the configured `portal_port`, and answers every request with the portal page. This makes the sign-in page appear automatically on connected devices instead of requiring the user to open a browser. dnsmasq resolves all DNS to the lab gateway to support this.
 
-**Realistic (blind) scenario:** the client-facing pages are deliberately neutral — a normal-looking Wi-Fi sign-in page, and after submission an ordinary "You are connected" confirmation. They do **not** reveal that this is a simulation. The participant only learns it was an authorized awareness test later, during the **debrief / manual report**, using the operator's screenshots from the live Evil Twin dashboard and the configured educational message. (Credential safety is unchanged — the password is still never stored.)
+**Realistic (blind) scenario:** the client-facing pages are deliberately neutral — a normal-looking Wi-Fi sign-in page, and after submission an ordinary "You are connected" confirmation.
 
-The live Awareness dashboard shows behaviour events (clients, portal opens, sign-in submissions, **passwords entered**, completions) without ever storing passwords. This dashboard is the source of the screenshots for the manual report.
+The live Awareness dashboard shows behaviour events (clients, portal opens, sign-in submissions, **passwords entered**, completions).
 
 Hashcat GPU: **warning only**. Figo never installs GPU drivers; CPU (`aircrack-ng`) is the default crack engine.
 
@@ -154,16 +152,16 @@ Workflow (Security Awareness Lab):
 
 1. Select wireless interface (or reuse the one already set)  
 2. Discover nearby networks (reuses Figo scanning)  
-3. Select an **authorized** target  
+3. Select a target  
 4. Review target SSID / BSSID / channel / band / security / signal / interface  
 5. Confirm portal + network settings (incl. AP security)  
-6. Explicit **Y/N** authorization confirmation (never auto-starts)  
+6. Explicit **Y/N** confirmation (never auto-starts)  
 7. Start controlled lab AP + local portal — Figo first hardens the adapter (rfkill unblock, unmanage from NetworkManager, stop any `wpa_supplicant` holding *this* interface) and fails fast with a clear message if the adapter lacks AP mode  
-8. Participants connect → neutral sign-in page pops up → they submit → they see a normal "connected" page  
-9. Live Rich dashboard captures their behaviour in real time and shows **service health (AP / DHCP-DNS / Portal)** and the **connected client list (IP · MAC · host)** — this is what you screenshot for the report. The portal auto-restarts if its HTTP server dies.  
+8. Clients connect → neutral sign-in page pops up → they submit → they see a normal "connected" page  
+9. Live Rich dashboard captures behaviour in real time and shows **service health (AP / DHCP-DNS / Portal)** and the **connected client list (IP · MAC · host)**. The portal auto-restarts if its HTTP server dies.  
 10. Press **S** or **Ctrl+C** to stop  
 11. Full cleanup and best-effort restore of the original interface / NetworkManager state  
-12. Figo offers to **save a session report** (JSON + text, no secrets) under `~/figo-reports/` for the debrief  
+12. Figo offers to **save a session report** (JSON + text) under `~/figo-reports/`  
 
 ### Reliability & troubleshooting
 
@@ -172,10 +170,6 @@ Workflow (Security Awareness Lab):
 - The lab AP defaults to open; use WPA2 (menu 3) to avoid the "insecure network" warning.
 
 ## Security Awareness Lab
-
-The portal demonstrates why connecting to an unexpected duplicate Wi-Fi network is dangerous.
-
-It measures **behavior**, not credentials.
 
 ### What is collected
 
@@ -199,23 +193,13 @@ Non-sensitive metrics only, for example:
 
 ### Sign-in simulation (password field)
 
-To realistically measure behaviour, the portal shows a **neutral sign-in page with a password field** (enable/disable via *Configure awareness portal → Show a sign-in page*). This simulates an employee logging in on an unexpected Wi-Fi page. When the form is submitted:
+The portal can show a **neutral sign-in page with a password field** (enable/disable via *Configure awareness portal → Show a sign-in page*). When the form is submitted:
 
 1. The server reads the password field **only** to compute a single boolean (was it non-empty?), then **immediately discards** the value. It is never stored, logged, hashed, or transmitted.
-2. The participant is shown an ordinary **"You are connected"** confirmation. The page does **not** reveal that this was a simulation — the reveal is intentionally deferred to the debrief / manual report so employees cannot detect the test from the page itself.
-3. The tool's live dashboard updates with the behaviour in real time (opened the page, submitted the form, typed a password). This is the operator's evidence for the report.
+2. The client is shown an ordinary **"You are connected"** confirmation.
+3. The tool's live dashboard updates with the behaviour in real time (opened the page, submitted the form, typed a password).
 
 If the sign-in page is disabled, the portal falls back to an explicit behavioural prompt (**“I would enter my password here”**) that never renders a password field. An optional admin-defined **fake training value** may also be configured; submitted input is compared in memory and **never written to logs or disk**.
-
-## Authorized Use
-
-This toolkit is for:
-
-- authorized security assessments
-- controlled laboratory environments
-- security awareness training with permission
-
-Unauthorized use against networks you do not own or lack permission to test is illegal.
 
 ## Configuration
 
@@ -284,7 +268,3 @@ Open APs always warn on clients. Set **AP security → WPA2** in *Configure lab 
 
 **Ctrl+C did not restore Wi-Fi**  
 Re-run cleanup by starting/stopping the lab again, or manually: `nmcli device set <iface> managed yes` and reconnect.
-
-## Safety boundary
-
-Figo must not be extended into credential harvesting, phishing credential theft, cookie/session theft, stealth persistence, or external credential exfiltration. The Security Awareness Portal exists to teach and measure behavior without collecting real credentials.

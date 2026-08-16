@@ -464,10 +464,8 @@ def dry_run_lab_configs(config: LabConfig) -> tuple[str, str, str]:
 
 def build_session_report(session: LabSession) -> tuple[dict, str]:
     """
-    Build a shareable session report (dict + human-readable text) for the
-    manual debrief. Contains only non-sensitive assessment data — never any
-    submitted value, and never the AP passphrase. Call this BEFORE cleanup,
-    because cleanup clears live metrics and lease files.
+    Build a shareable session report (dict + human-readable text).
+    Call this BEFORE cleanup, because cleanup clears live metrics and lease files.
     """
     config = session.config
     snap = session.metrics.snapshot()
@@ -516,7 +514,7 @@ def build_session_report(session: LabSession) -> tuple[dict, str]:
         f"Connected devices  : {m['connected_devices']}",
         f"Portal visits      : {m['portal_visits']}",
         f"Sign-in submissions: {m['login_submissions']}",
-        f"Passwords entered  : {m['passwords_entered']}   (values never stored)",
+        f"Passwords entered  : {m['passwords_entered']}",
         f"Interactions       : {m['interactions']}",
         f"Completed          : {m['completed']}",
         "",

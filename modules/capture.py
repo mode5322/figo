@@ -207,8 +207,7 @@ def action_capture(settings: Settings) -> None:
                 "Figo will not pretend this is a normal WPA2 crack path.\n\n"
                 "What you can do:\n"
                 "• Pick a WPA/WPA2 lab target from menu [bold]2[/bold]\n"
-                "• Or use menu [bold]8 — Evil Twin Lab[/bold] for awareness training\n"
-                "  (open lab AP + portal — no real password collection)",
+                "• Or use menu [bold]8 — Evil Twin Lab[/bold]",
             )
             return
 
