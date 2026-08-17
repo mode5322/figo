@@ -366,14 +366,8 @@ def _preview_portal_page(settings: Any, api: Any) -> None:
     portal = _portal_from_settings(settings)
     network = _lab_network_from_settings(settings)
     ssid = _preview_ssid(settings)
-
-    class _PreviewConfig:
-        portal = portal
-
-        def effective_ssid(self) -> str:
-            return ssid
-
-    cfg = _PreviewConfig()
+    # Class bodies do not close over function locals; use a plain namespace.
+    cfg = SimpleNamespace(portal=portal, effective_ssid=lambda: ssid)
     ctx = templates.render_context(cfg)
 
     def landing_html() -> str:
