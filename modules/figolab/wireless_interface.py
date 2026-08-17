@@ -121,6 +121,14 @@ def snapshot_interface(name: str) -> InterfaceSnapshot:
     )
 
 
+def disconnect_interface(name: str) -> None:
+    """Disconnect the adapter from any active NetworkManager Wi-Fi connection."""
+    nmcli = shutil.which("nmcli")
+    if not nmcli or not name:
+        return
+    _run([nmcli, "device", "disconnect", name], timeout=20)
+
+
 def rfkill_unblock() -> None:
     """Best-effort: clear any soft rfkill block that would stop the AP coming up."""
     rfkill = shutil.which("rfkill")

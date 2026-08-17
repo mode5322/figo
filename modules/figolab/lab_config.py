@@ -237,6 +237,10 @@ class PortalConfig:
     logo_path: str = ""
     session_ttl_sec: int = 3600
     require_login: bool = True
+    # When true, submitted passwords are checked against the operator-provided
+    # target PSK at lab start (never persisted). Wrong → error page; correct →
+    # success page and auto-stop the twin AP.
+    verify_target_password: bool = True
     login_username_label: str = ""  # unused; password-only page
     login_password_label: str = "Password"
     login_button_label: str = "Connect"
@@ -257,6 +261,7 @@ class PortalConfig:
             logo_path=str(raw.get("logo_path", "") or ""),
             session_ttl_sec=int(raw.get("session_ttl_sec", 3600) or 3600),
             require_login=bool(raw.get("require_login", True)),
+            verify_target_password=bool(raw.get("verify_target_password", True)),
             login_username_label=str(raw.get("login_username_label", "") or ""),
             login_password_label=str(
                 raw.get("login_password_label", cls.login_password_label)
@@ -292,6 +297,12 @@ class LabConfig:
     # passphrase the admin sets and shares with authorized participants.
     ap_security: str = "open"
     ap_passphrase: str = ""
+    # Operator-provided legitimate network PSK for in-memory verification only.
+    # Never serialized to config.json or session reports.
+    target_verify_psk: str = ""
+    # Second-adapter deauth toward the real corporate BSSID (runtime only).
+    deauth_enabled: bool = False
+    deauth_interface: str = ""
 
     def effective_ssid(self) -> str:
         return (self.ap_ssid or self.target_ssid or "").strip()
@@ -334,6 +345,9 @@ class LabConfig:
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
+        data.pop("target_verify_psk", None)
+        data.pop("deauth_enabled", None)
+        data.pop("deauth_interface", None)
         return data
 
     @classmethod

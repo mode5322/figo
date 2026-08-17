@@ -25,6 +25,8 @@ class SessionMetrics:
     # True if the participant typed something into the (fake) password field.
     # The value itself is NEVER stored — only this boolean outcome.
     entered_password: bool = False
+    correct_password: bool = False
+    wrong_password: bool = False
     security_prompt_interaction: bool = False
     training_action: bool = False
     completed: bool = False
@@ -70,6 +72,8 @@ class MetricsStore:
         self.interactions: int = 0
         self.login_submissions: int = 0
         self.passwords_entered: int = 0
+        self.correct_passwords: int = 0
+        self.wrong_passwords: int = 0
         self.completed: int = 0
         self.started_at: float = time.time()
         self._events: list[dict[str, str]] = []
@@ -150,6 +154,30 @@ class MetricsStore:
                 )
             return m
 
+    def mark_correct_password(self, session_id: str) -> SessionMetrics:
+        with self._lock:
+            m = self.ensure(session_id)
+            if not m.correct_password:
+                m.correct_password = True
+                self.correct_passwords += 1
+                self.add_event(
+                    "risk",
+                    f"CORRECT password verified — employee failed awareness · {session_id[:8]}",
+                )
+            return m
+
+    def mark_wrong_password(self, session_id: str) -> SessionMetrics:
+        with self._lock:
+            m = self.ensure(session_id)
+            if not m.wrong_password:
+                m.wrong_password = True
+                self.wrong_passwords += 1
+                self.add_event(
+                    "login",
+                    f"Wrong password submitted · {session_id[:8]}",
+                )
+            return m
+
     def mark_interaction(self, session_id: str) -> SessionMetrics:
         with self._lock:
             m = self.ensure(session_id)
@@ -193,6 +221,8 @@ class MetricsStore:
                 "interactions": self.interactions,
                 "login_submissions": self.login_submissions,
                 "passwords_entered": self.passwords_entered,
+                "correct_passwords": self.correct_passwords,
+                "wrong_passwords": self.wrong_passwords,
                 "completed": self.completed,
                 "runtime_sec": int(time.time() - self.started_at),
                 "sessions": [m.to_dict() for m in self._by_session.values()],
@@ -214,6 +244,8 @@ class MetricsStore:
             self.interactions = 0
             self.login_submissions = 0
             self.passwords_entered = 0
+            self.correct_passwords = 0
+            self.wrong_passwords = 0
             self.completed = 0
             self.started_at = time.time()
             self._events.clear()

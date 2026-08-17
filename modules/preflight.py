@@ -295,7 +295,23 @@ def run_preflight(
 
 
 def format_preflight_report(report: PreflightReport) -> str:
-    lines: list[str] = [f"Preflight · {report.mode}"]
+    ifaces = wireless_interfaces()
+    adapter_count = len(ifaces)
+    lines: list[str] = [
+        f"Preflight · {report.mode}",
+        f"Wireless adapters: {adapter_count}"
+        + (f"  →  {', '.join(ifaces)}" if ifaces else "  →  (none detected)"),
+    ]
+    if adapter_count < 2:
+        lines.append(
+            "[orange3]Note: disconnecting employees from the real AP (deauth) "
+            "requires a second wireless adapter.[/orange3]"
+        )
+    elif adapter_count >= 2:
+        lines.append(
+            "[dim]Two or more adapters — deauth toward the real AP is available "
+            "during Security Awareness Lab.[/dim]"
+        )
     for item in report.items:
         mark = "[green]OK[/green]" if item.ok else "[red]FAIL[/red]"
         lines.append(f"{mark}  {item.name}: {item.detail}")

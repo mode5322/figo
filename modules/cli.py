@@ -51,8 +51,10 @@ def _evil_twin_api():
 
 
 def action_evil_twin(settings: Settings) -> None:
+    from modules.figolab.awareness_lab_ui import apply_awareness_lab_patches
     from modules.figolab.evil_twin_menu import action_evil_twin_lab
 
+    apply_awareness_lab_patches()
     action_evil_twin_lab(settings, _evil_twin_api())
 
 

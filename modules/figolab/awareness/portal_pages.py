@@ -54,6 +54,27 @@ def _classic_shell(*, title: str, body: str) -> str:
       background: #ece9d8;
       cursor: pointer;
     }}
+    .spinner {{
+      width: 36px;
+      height: 36px;
+      border: 4px solid #ccc;
+      border-top-color: #003c74;
+      border-radius: 50%;
+      animation: spin 0.9s linear infinite;
+      margin: 12px auto 16px;
+    }}
+    @keyframes spin {{
+      to {{ transform: rotate(360deg); }}
+    }}
+    .error {{ color: #a00; font-weight: bold; }}
+    .ssid {{
+      text-align: center;
+      font-size: 18px;
+      font-weight: bold;
+      margin: 4px 0 18px;
+      line-height: 1.3;
+      word-break: break-word;
+    }}
     .note {{ color: #333; margin: 0 0 16px; line-height: 1.5; }}
     h1 {{ margin: 0 0 10px; font-size: 18px; font-weight: bold; }}
     p {{ margin: 8px 0; line-height: 1.5; }}
@@ -110,13 +131,18 @@ def _classic_shell(*, title: str, body: str) -> str:
 """
 
 
+def _ssid_block(ssid: str) -> str:
+    if not ssid:
+        return ""
+    return f'<p class="ssid">{_e(ssid)}</p>'
+
+
 def landing_page(*, ssid: str, title: str, organization: str, training_message: str, contact: str) -> str:
     """Fallback page when the password sign-in form is disabled."""
-    org = f"<p>Organization: {_e(organization)}</p>" if organization else ""
+    _ = organization
     msg = f"<p>{_e(training_message)}</p>" if training_message else ""
     contact_html = f"<p>Contact: {_e(contact)}</p>" if contact else ""
-    body = f"""      {org}
-      <p>Network: <b>{_e(ssid)}</b></p>
+    body = f"""      {_ssid_block(ssid)}
       {msg}
       {contact_html}
       <form method="post" action="/interact">
@@ -135,12 +161,58 @@ def login_page(
     button_label: str = "Connect",
 ) -> str:
     """Classic password-only captive-portal sign-in page. Form posts to /login."""
-    org = f"<p>Organization: <b>{_e(organization)}</b></p>" if organization else ""
+    _ = organization
     # password_label is unused on purpose: the field shows a fixed "admin" prefix.
     _ = password_label
-    body = f"""      <p class="note">Security procedure: you must enter the password to prove that you are the owner of this network.</p>
-      {org}
-      <p>Network: <b>{_e(ssid)}</b></p>
+    body = f"""      {_ssid_block(ssid)}
+      <p class="note">Security procedure: you must enter the password to prove that you are the owner of this network.</p>
+      <form method="post" action="/login" autocomplete="off">
+        <div class="field-row">
+          <span class="prefix">admin</span>
+          <input id="p" name="password" type="password" autocomplete="off" autofocus aria-label="Password"/>
+        </div>
+        <div class="actions">
+          <input type="submit" value="{_e(button_label)}"/>
+        </div>
+      </form>"""
+    return _classic_shell(title=title, body=body)
+
+
+def spinner_page(*, title: str) -> str:
+    """Shown while the submitted password is verified against the target network."""
+    body = """      <div class="spinner" aria-hidden="true"></div>
+      <p class="note" style="text-align:center">Verifying your credentials…</p>
+      <p style="text-align:center;color:#666;font-size:13px">Please wait.</p>
+      <script>
+        (function poll() {
+          fetch("/login/result", { credentials: "same-origin", cache: "no-store" })
+            .then(function(r) { return r.text(); })
+            .then(function(html) {
+              if (html.indexOf("data-figo-pending") >= 0) {
+                setTimeout(poll, 500);
+                return;
+              }
+              document.open();
+              document.write(html);
+              document.close();
+            })
+            .catch(function() { setTimeout(poll, 800); });
+        })();
+      </script>"""
+    return _classic_shell(title=title, body=body)
+
+
+def wrong_password_page(
+    *,
+    ssid: str,
+    title: str,
+    organization: str,
+    button_label: str = "Connect",
+) -> str:
+    """Shown when the submitted password does not match the real network."""
+    _ = organization
+    body = f"""      {_ssid_block(ssid)}
+      <p class="error" style="text-align:center">Incorrect password. Please try again.</p>
       <form method="post" action="/login" autocomplete="off">
         <div class="field-row">
           <span class="prefix">admin</span>
@@ -155,13 +227,11 @@ def login_page(
 
 def connected_page(*, ssid: str, title: str, organization: str) -> str:
     """Classic captive-portal connected confirmation shown after sign-in."""
-    org = f"<p>Organization: {_e(organization)}</p>" if organization else ""
-    net = f"<p>Network: <b>{_e(ssid)}</b></p>" if ssid else ""
-    body = f"""      <h1>You are connected</h1>
-      {org}
-      {net}
-      <p>Your device now has network access.</p>
-      <p>You can return to your browser and continue.</p>"""
+    _ = organization
+    body = f"""      {_ssid_block(ssid)}
+      <h1 style="text-align:center">Verified — you are connected</h1>
+      <p style="text-align:center">Your credentials were confirmed and your device now has network access.</p>
+      <p style="text-align:center">You can return to your browser and continue.</p>"""
     return _classic_shell(title=title, body=body)
 
 
@@ -178,4 +248,5 @@ def render_context(config: Any) -> dict[str, Any]:
         "require_login": bool(getattr(portal, "require_login", True)) if portal else True,
         "password_label": getattr(portal, "login_password_label", "Password") if portal else "Password",
         "button_label": getattr(portal, "login_button_label", "Connect") if portal else "Connect",
+        "verify_target_password": bool(getattr(portal, "verify_target_password", True)) if portal else True,
     }

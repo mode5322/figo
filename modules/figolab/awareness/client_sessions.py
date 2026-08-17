@@ -22,6 +22,9 @@ class ClientSession:
     viewed_login: bool = False
     submitted_login: bool = False
     entered_password: bool = False
+    # "" | pending | ok | wrong — portal password verification state
+    verify_status: str = ""
+    correct_password: bool = False
     security_prompt_interaction: bool = False
     training_action: bool = False
     completed: bool = False

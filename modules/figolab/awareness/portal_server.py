@@ -4,20 +4,22 @@ Phones and laptops probe captive URLs; dnsmasq points them at the lab gateway.
 This server listens on port 80 plus the configured portal port and answers every
 request with the sign-in page so the OS captive assistant opens.
 
-The sign-in form posts to ``/login``. The password field is read only to compute
-a boolean (non-empty?) and is then discarded.
+When password verification is enabled, ``POST /login`` shows a spinner while the
+submitted value is compared in memory against the operator-provided target PSK.
+Only boolean outcomes are recorded — the password itself is never stored.
 """
 
 from __future__ import annotations
 
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable, Optional
 from urllib.parse import parse_qs
 
 from modules.figolab.awareness import portal_pages as templates
 from modules.figolab.awareness.awareness_metrics import MetricsStore, safe_record_interaction
 from modules.figolab.awareness.client_sessions import SessionStore
+from modules.figolab.awareness.password_verify import verify_target_password
 
 if TYPE_CHECKING:
     from modules.figolab.lab_config import LabConfig
@@ -26,14 +28,23 @@ CAPTIVE_PORT = 80
 
 
 class AwarenessPortal:
-    def __init__(self, config: "LabConfig", metrics: MetricsStore, sessions: SessionStore) -> None:
+    def __init__(
+        self,
+        config: "LabConfig",
+        metrics: MetricsStore,
+        sessions: SessionStore,
+        *,
+        on_verify_success: Optional[Callable[[], None]] = None,
+    ) -> None:
         self.config = config
         self.metrics = metrics
         self.sessions = sessions
+        self._on_verify_success = on_verify_success
         self._servers: list[ThreadingHTTPServer] = []
         self._threads: list[threading.Thread] = []
         self.bound_ports: list[int] = []
         self.active = False
+        self._verify_lock = threading.RLock()
 
     def alive(self) -> bool:
         if not self.active:
@@ -47,6 +58,14 @@ class AwarenessPortal:
             return f"http://{host}/"
         port = self.bound_ports[0] if self.bound_ports else self.config.portal_port
         return f"http://{host}:{port}/"
+
+    def _verification_enabled(self) -> bool:
+        portal = self.config.portal
+        if not portal.require_login:
+            return False
+        if not getattr(portal, "verify_target_password", True):
+            return False
+        return bool((self.config.target_verify_psk or "").strip())
 
     def _connected_body(self) -> str:
         ctx = templates.render_context(self.config)
@@ -75,6 +94,62 @@ class AwarenessPortal:
             training_message=ctx["training_message"],
             contact=ctx["contact"],
         )
+
+    def _wrong_password_body(self) -> str:
+        ctx = templates.render_context(self.config)
+        return templates.wrong_password_page(
+            ssid=ctx["ssid"],
+            title=ctx["title"],
+            organization=ctx["organization"],
+            button_label=ctx["button_label"],
+        )
+
+    def _spinner_body(self) -> str:
+        ctx = templates.render_context(self.config)
+        return templates.spinner_page(title=ctx["title"])
+
+    def _pending_body(self) -> str:
+        return '<!DOCTYPE html><html><body data-figo-pending="1"></body></html>'
+
+    def _run_verification(self, session_id: str, password: str) -> None:
+        reference = self.config.target_verify_psk
+        try:
+            correct = verify_target_password(password, reference)
+        finally:
+            password = ""  # noqa: F841
+
+        client = self.sessions.get(session_id)
+        if client is None:
+            return
+
+        with self._verify_lock:
+            if correct:
+                client.verify_status = "ok"
+                client.correct_password = True
+                self.metrics.mark_correct_password(session_id)
+                self.metrics.mark_completed(session_id)
+                client.completed = True
+                if self._on_verify_success:
+                    try:
+                        self._on_verify_success()
+                    except Exception:
+                        pass
+            else:
+                client.verify_status = "wrong"
+                self.metrics.mark_wrong_password(session_id)
+
+    def _start_verification(self, session_id: str, password: str) -> None:
+        client = self.sessions.get(session_id)
+        if client is None:
+            return
+        client.verify_status = "pending"
+        thread = threading.Thread(
+            target=self._run_verification,
+            args=(session_id, password),
+            name=f"figo-portal-verify-{session_id[:8]}",
+            daemon=True,
+        )
+        thread.start()
 
     def start(self, bind_host: str = "0.0.0.0") -> None:
         if self.active:
@@ -120,6 +195,20 @@ class AwarenessPortal:
                 if path.startswith("/health"):
                     self._send(200, "ok", session.session_id, "text/plain; charset=utf-8")
                     return
+                if path.startswith("/login/result"):
+                    status = session.verify_status
+                    if status == "pending":
+                        self._send(200, portal._pending_body(), session.session_id)
+                        return
+                    if status == "wrong":
+                        session.verify_status = ""
+                        self._send(200, portal._wrong_password_body(), session.session_id)
+                        return
+                    if status == "ok":
+                        self._send(200, portal._connected_body(), session.session_id)
+                        return
+                    self._send(200, portal._landing_body(session), session.session_id)
+                    return
                 portal.metrics.mark_portal_opened(session.session_id)
                 session.portal_opened = True
                 self._send(200, portal._landing_body(session), session.session_id)
@@ -135,12 +224,20 @@ class AwarenessPortal:
                 if path.startswith("/login"):
                     password = form.get("password", [""])[0]
                     entered_password = bool((password or "").strip())
-                    password = None  # noqa: F841
-                    form.pop("password", None)
                     portal.metrics.mark_login_submitted(session.session_id, entered_password)
                     session.submitted_login = True
                     session.entered_password = entered_password
                     session.security_prompt_interaction = True
+
+                    if portal._verification_enabled() and entered_password:
+                        portal._start_verification(session.session_id, password)
+                        password = None  # noqa: F841
+                        form.pop("password", None)
+                        self._send(200, portal._spinner_body(), session.session_id)
+                        return
+
+                    password = None  # noqa: F841
+                    form.pop("password", None)
                     portal.metrics.mark_completed(session.session_id)
                     session.completed = True
                     self._send(200, portal._connected_body(), session.session_id)

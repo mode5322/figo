@@ -24,8 +24,10 @@ from modules.figolab.awareness.awareness_metrics import (
 )
 from modules.figolab.awareness.portal_server import AwarenessPortal
 from modules.figolab.awareness.client_sessions import SessionStore
+from modules.figolab.lab_deauth import DeauthWorker
 from modules.figolab.wireless_interface import (
     InterfaceSnapshot,
+    disconnect_interface,
     restore_interface,
     rfkill_unblock,
     set_nm_managed,
@@ -51,6 +53,7 @@ class LabSession:
     metrics: MetricsStore = field(default_factory=MetricsStore)
     sessions: Optional[SessionStore] = None
     portal: Optional[AwarenessPortal] = None
+    deauth: Optional[DeauthWorker] = None
     snapshot: Optional[InterfaceSnapshot] = None
     temp_dir: Optional[Path] = None
     hostapd_conf: Optional[Path] = None
@@ -63,6 +66,8 @@ class LabSession:
     portal_active: bool = False
     _cleaned: bool = False
     _portal_restarts: int = 0
+    stop_requested: bool = False
+    stop_reason: str = ""
     _log_handles: list = field(default_factory=list)
     _lock: threading.RLock = field(default_factory=threading.RLock)
 
@@ -91,6 +96,15 @@ class LabSession:
 
     def portal_ok(self) -> bool:
         return bool(self.portal is not None and self.portal.alive())
+
+    def deauth_ok(self) -> bool:
+        return bool(self.deauth is not None and self.deauth.active)
+
+    def request_stop(self, reason: str = "") -> None:
+        with self._lock:
+            self.stop_requested = True
+            if reason:
+                self.stop_reason = reason
 
     def ensure_services(self) -> None:
         """
@@ -169,6 +183,7 @@ def prepare_interface(config: LabConfig, snapshot: InterfaceSnapshot) -> None:
 
     # Clear soft rfkill blocks and release the adapter from anything holding it.
     rfkill_unblock()
+    disconnect_interface(iface)
     set_nm_managed(iface, False)
     killed = stop_interfering_processes(iface)
     if killed:
@@ -274,13 +289,22 @@ def start_lab_session(config: LabConfig, *, enable_portal: bool) -> LabSession:
             )
 
         if enable_portal and config.portal_enabled:
-            session.portal = AwarenessPortal(config, session.metrics, session.sessions)
+            session.portal = AwarenessPortal(
+                config,
+                session.metrics,
+                session.sessions,
+                on_verify_success=lambda: session.request_stop("correct_password_verified"),
+            )
             try:
                 session.portal.start(bind_host=config.gateway_ip)
             except OSError:
                 # Fall back to all interfaces if gateway bind fails in dry environments.
                 session.portal.start(bind_host="0.0.0.0")
             session.portal_active = True
+
+        if config.deauth_enabled and config.deauth_interface:
+            session.deauth = DeauthWorker(config, session.metrics)
+            session.deauth.start()
 
         session.started_at = time.time()
         _set_active(session)
@@ -360,6 +384,13 @@ def cleanup_lab_session(session: Optional[LabSession] = None) -> None:
             except Exception:
                 pass
             session.portal_active = False
+
+        if session.deauth is not None:
+            try:
+                session.deauth.stop()
+            except Exception:
+                pass
+            session.deauth = None
 
         # 2–4. Stop DHCP/DNS, AP, and tracked children
         try:
@@ -489,6 +520,8 @@ def build_session_report(session: LabSession) -> tuple[dict, str]:
             "portal_visits": snap["portal_visits"],
             "login_submissions": snap["login_submissions"],
             "passwords_entered": snap["passwords_entered"],
+            "correct_passwords": snap.get("correct_passwords", 0),
+            "wrong_passwords": snap.get("wrong_passwords", 0),
             "interactions": snap["interactions"],
             "completed": snap["completed"],
         },
@@ -517,6 +550,8 @@ def build_session_report(session: LabSession) -> tuple[dict, str]:
         f"Portal visits      : {m['portal_visits']}",
         f"Sign-in submissions: {m['login_submissions']}",
         f"Passwords entered  : {m['passwords_entered']}   (values never stored)",
+        f"Correct passwords: {m.get('correct_passwords', 0)}   (awareness failure)",
+        f"Wrong passwords  : {m.get('wrong_passwords', 0)}",
         f"Interactions       : {m['interactions']}",
         f"Completed          : {m['completed']}",
         "",
