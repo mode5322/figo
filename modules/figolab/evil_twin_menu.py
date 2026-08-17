@@ -10,6 +10,7 @@ import time
 import tty
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from types import SimpleNamespace
 from typing import Any, Optional
 
 from rich import box

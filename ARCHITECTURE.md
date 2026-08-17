@@ -1,8 +1,8 @@
 # Figo — Architecture
 
-**Last updated:** 2026-08-16  
+**Last updated:** 2026-08-17  
 **Repo:** https://github.com/mode5322/Figo  
-**Branch reviewed:** `cursor/preview-portal-page-e15f`  
+**Branch reviewed:** `cursor/fix-preview-portal-nameerror-e15f`  
 **Python LOC (app + tests):** ~4800+
 
 This file is the source of truth for how Figo is structured. Update it in the same change whenever code, menus, config, safety rules, or layout change.
