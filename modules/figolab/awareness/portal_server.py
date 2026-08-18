@@ -101,6 +101,7 @@ class AwarenessPortal:
             ssid=ctx["ssid"],
             title=ctx["title"],
             organization=ctx["organization"],
+            password_label=ctx["password_label"],
             button_label=ctx["button_label"],
         )
 
@@ -293,4 +294,5 @@ class AwarenessPortal:
         self._servers = []
         self._threads = []
         self.bound_ports = []
-        self.active = False
+        self.active = False  # HTTP threads stopped; safe to start() again
+

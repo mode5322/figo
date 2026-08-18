@@ -228,7 +228,7 @@ def validate_ap_passphrase(passphrase: str) -> tuple[bool, str]:
 class PortalConfig:
     enabled: bool = True
     organization: str = ""
-    portal_title: str = "Wi-Fi Authentication"
+    portal_title: str = "Network Access Verification"
     training_message: str = "Please sign in with your network account to continue."
     security_contact: str = ""
     # Kept for older config.json files; not shown on client pages.
